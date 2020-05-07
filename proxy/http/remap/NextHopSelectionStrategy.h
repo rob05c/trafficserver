@@ -123,7 +123,7 @@ struct HostRecord : ATSConsistentHashNode {
     failCount   = o.failCount;
     upAt        = o.upAt;
     weight      = o.weight;
-    hash_string = "";
+    hash_string = o.hash_string;
     host_index  = -1;
     group_index = -1;
     available   = true;

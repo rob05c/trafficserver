@@ -100,7 +100,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         // mark down p1.foo.com.  markNextHop looks at the 'result'
         // and uses the host index there mark down the host selected
         // from a
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // second request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
@@ -111,7 +111,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         CHECK(strcmp(result->hostname, "p2.foo.com") == 0);
 
         // mark down p2.foo.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // third request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
@@ -122,7 +122,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         CHECK(strcmp(result->hostname, "s2.bar.com") == 0);
 
         // mark down s2.bar.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // fourth request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
@@ -133,7 +133,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         CHECK(strcmp(result->hostname, "s1.bar.com") == 0);
 
         // mark down s1.bar.com.
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // fifth request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
@@ -144,7 +144,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         CHECK(strcmp(result->hostname, "q1.bar.com") == 0);
 
         // mark down q1.bar.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // sixth request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
         build_request(10006, &sm, nullptr, "rabbit.net", nullptr);
@@ -154,7 +154,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         CHECK(strcmp(result->hostname, "q2.bar.com") == 0);
 
         // mark down q2.bar.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // seventh request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
         build_request(10007, &sm, nullptr, "rabbit.net", nullptr);
@@ -226,7 +226,7 @@ SCENARIO("Testing NextHopConsistentHash class (all firstcalls), using policy 'co
         CHECK(strcmp(result->hostname, "p1.foo.com") == 0);
 
         // mark down p1.foo.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // second request
         build_request(20002, &sm, nullptr, "rabbit.net", nullptr);
         result->reset();
@@ -235,7 +235,7 @@ SCENARIO("Testing NextHopConsistentHash class (all firstcalls), using policy 'co
         CHECK(strcmp(result->hostname, "p2.foo.com") == 0);
 
         // mark down p2.foo.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // third request
         result->reset();
@@ -245,7 +245,7 @@ SCENARIO("Testing NextHopConsistentHash class (all firstcalls), using policy 'co
         CHECK(strcmp(result->hostname, "s2.bar.com") == 0);
 
         // mark down s2.bar.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // fourth request
         result->reset();
@@ -255,7 +255,7 @@ SCENARIO("Testing NextHopConsistentHash class (all firstcalls), using policy 'co
         CHECK(strcmp(result->hostname, "s1.bar.com") == 0);
 
         // mark down s1.bar.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // fifth request
         result->reset();
@@ -321,7 +321,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         CHECK(strcmp(result->hostname, "c2.foo.com") == 0);
 
         // simulated failure, mark c2 down and retry request
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // second request
         build_request(30002, &sm, nullptr, "bunny.net.net/asset1", nullptr);
@@ -330,7 +330,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         CHECK(strcmp(result->hostname, "c3.bar.com") == 0);
 
         // mark down c3.bar.com
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
 
         // third request
         build_request(30003, &sm, nullptr, "bunny.net/asset2", nullptr);
@@ -340,7 +340,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         CHECK(strcmp(result->hostname, "c6.bar.com") == 0);
 
         // just mark it down and retry request
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // fourth request
         build_request(30004, &sm, nullptr, "bunny.net/asset2", nullptr);
         strategy->findNextHop(txnp);
@@ -348,7 +348,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         CHECK(strcmp(result->hostname, "c1.foo.com") == 0);
 
         // mark it down
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // fifth request - new request
         build_request(30005, &sm, nullptr, "bunny.net/asset3", nullptr);
         result->reset();
@@ -357,7 +357,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         CHECK(strcmp(result->hostname, "c4.bar.com") == 0);
 
         // mark it down and retry
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // sixth request
         result->reset();
         build_request(30006, &sm, nullptr, "bunny.net/asset3", nullptr);
@@ -366,7 +366,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         CHECK(strcmp(result->hostname, "c5.bar.com") == 0);
 
         // mark it down
-        strategy->markNextHop(txnp, result->hostname, NH_MARK_DOWN);
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
         // seventh request - new request with all hosts down and go_direct is false.
         result->reset();
         build_request(30007, &sm, nullptr, "bunny.net/asset4", nullptr);

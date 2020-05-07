@@ -34,8 +34,8 @@
 enum NHCmd { NH_MARK_UP, NH_MARK_DOWN };
 
 struct NHHealthStatus {
-  virtual bool isNextHopAvailable(TSHttpTxn txn, const char *hostname, void *ih = nullptr)                                    = 0;
-  virtual void markNextHop(TSHttpTxn txn, const char *hostname, const NHCmd status, void *ih = nullptr, const time_t now = 0) = 0;
+  virtual bool isNextHopAvailable(TSHttpTxn txn, const char *hostname, const int port, void *ih = nullptr)                                    = 0;
+  virtual void markNextHop(TSHttpTxn txn, const char *hostname, const int port, const NHCmd status, void *ih = nullptr, const time_t now = 0) = 0;
   virtual ~NHHealthStatus() {}
 };
 

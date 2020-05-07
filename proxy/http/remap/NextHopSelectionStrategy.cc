@@ -195,9 +195,9 @@ NextHopSelectionStrategy::Init(const YAML::Node &n)
 }
 
 void
-NextHopSelectionStrategy::markNextHop(TSHttpTxn txnp, const char *hostname, const NHCmd status, void *ih, const time_t now)
+NextHopSelectionStrategy::markNextHop(TSHttpTxn txnp, const char *hostname, const int port, const NHCmd status, void *ih, const time_t now)
 {
-  return passive_health.markNextHop(txnp, hostname, status, ih, now);
+  return passive_health.markNextHop(txnp, hostname, port, status, ih, now);
 }
 
 bool

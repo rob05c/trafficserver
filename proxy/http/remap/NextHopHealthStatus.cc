@@ -32,8 +32,11 @@ NextHopHealthStatus::insert(std::vector<std::shared_ptr<HostRecord>> &hosts)
 {
   for (uint32_t ii = 0; ii < hosts.size(); ii++) {
     std::shared_ptr<HostRecord> h = hosts[ii];
-    host_map.emplace(std::make_pair(h->hostname, h));
-    NH_Debug(NH_DEBUG_TAG, "inserting %s into host_map", h->hostname.c_str());
+    for(auto protocol = h->protocols.begin(); protocol != h->protocols.end(); ++protocol) {
+      const std::string host_port = h->getHostPort((*protocol)->port);
+      host_map.emplace(std::make_pair(host_port, h));
+      NH_Debug(NH_DEBUG_TAG, "inserting %s into host_map", host_port.c_str());
+    }
   }
 }
 
@@ -41,15 +44,16 @@ NextHopHealthStatus::insert(std::vector<std::shared_ptr<HostRecord>> &hosts)
  * check that hostname is available for use.
  */
 bool
-NextHopHealthStatus::isNextHopAvailable(TSHttpTxn txn, const char *hostname, void *ih)
+NextHopHealthStatus::isNextHopAvailable(TSHttpTxn txn, const char *hostname, const int port, void *ih)
 {
   HttpSM *sm    = reinterpret_cast<HttpSM *>(txn);
   int64_t sm_id = sm->sm_id;
 
-  auto iter = host_map.find(hostname);
+  const std::string host_port = HostRecord::makeHostPort(hostname, port);
+  auto iter = host_map.find(host_port);
 
   if (iter == host_map.end()) {
-    NH_Debug(NH_DEBUG_TAG, "[%" PRId64 "] no host named %s found in host_map", sm_id, hostname);
+    NH_Debug(NH_DEBUG_TAG, "[%" PRId64 "] no host named %s found in host_map", sm_id, host_port.c_str());
     return false;
   }
 
@@ -61,7 +65,7 @@ NextHopHealthStatus::isNextHopAvailable(TSHttpTxn txn, const char *hostname, voi
  * mark up or down the indicated host
  */
 void
-NextHopHealthStatus::markNextHop(TSHttpTxn txn, const char *hostname, const NHCmd status, void *ih, const time_t now)
+NextHopHealthStatus::markNextHop(TSHttpTxn txn, const char *hostname, const int port, const NHCmd status, void *ih, const time_t now)
 {
   time_t _now;
   now == 0 ? _now = time(nullptr) : _now = now;
@@ -87,9 +91,10 @@ NextHopHealthStatus::markNextHop(TSHttpTxn txn, const char *hostname, const NHCm
     return;
   }
 
-  auto iter = host_map.find(hostname);
+  const std::string host_port = HostRecord::makeHostPort(hostname, port);
+  auto iter = host_map.find(host_port);
   if (iter == host_map.end()) {
-    NH_Debug(NH_DEBUG_TAG, "[%" PRId64 "] no host named %s found in host_map", sm_id, hostname);
+    NH_Debug(NH_DEBUG_TAG, "[%" PRId64 "] no host named %s found in host_map", sm_id, host_port.c_str());
     return;
   }
 

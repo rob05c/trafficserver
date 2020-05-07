@@ -171,7 +171,7 @@ struct HostRecord : ATSConsistentHashNode {
   }
 
   int
-  getPort(NHSchemeType scheme)
+  getPort(NHSchemeType scheme) const
   {
     int port = 0;
     for (uint32_t i = 0; i < protocols.size(); i++) {
@@ -182,14 +182,26 @@ struct HostRecord : ATSConsistentHashNode {
     }
     return port;
   }
+
+  static std::string
+  makeHostPort(const std::string& hostname, const int port)
+  {
+    return hostname + ":" + std::to_string(port);
+  }
+
+  std::string
+  getHostPort(const int port) const
+  {
+    return makeHostPort(this->hostname, port);
+  }
 };
 
 class NextHopHealthStatus : public NHHealthStatus
 {
 public:
   void insert(std::vector<std::shared_ptr<HostRecord>> &hosts);
-  bool isNextHopAvailable(TSHttpTxn txn, const char *hostname, void *ih = nullptr) override;
-  void markNextHop(TSHttpTxn txn, const char *hostname, const NHCmd status, void *ih = nullptr, const time_t now = 0) override;
+  bool isNextHopAvailable(TSHttpTxn txn, const char *hostname, const int port, void *ih = nullptr) override;
+  void markNextHop(TSHttpTxn txn, const char *hostname, const int port, const NHCmd status, void *ih = nullptr, const time_t now = 0) override;
   NextHopHealthStatus(){};
 
 private:
@@ -204,7 +216,7 @@ public:
   virtual ~NextHopSelectionStrategy(){};
   bool Init(const YAML::Node &n);
   virtual void findNextHop(TSHttpTxn txnp, void *ih = nullptr, time_t now = 0) = 0;
-  void markNextHop(TSHttpTxn txnp, const char *hostname, const NHCmd status, void *ih = nullptr, const time_t now = 0);
+  void markNextHop(TSHttpTxn txnp, const char *hostname, const int port, const NHCmd status, void *ih = nullptr, const time_t now = 0);
   bool nextHopExists(TSHttpTxn txnp, void *ih = nullptr);
 
   virtual bool responseIsRetryable(unsigned int current_retry_attempts, HTTPStatus response_code);

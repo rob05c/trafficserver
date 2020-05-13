@@ -276,6 +276,231 @@ SCENARIO("Testing NextHopConsistentHash class (all firstcalls), using policy 'co
   }
 }
 
+SCENARIO("Testing NextHop ignore_self_detect false", "[NextHopConsistentHash]")
+{
+
+  // We need this to build a HdrHeap object in build_request();
+  // No thread setup, forbid use of thread local allocators.
+  cmd_disable_pfreelist = true;
+  // Get all of the HTTP WKS items populated.
+  http_init();
+
+  GIVEN("Loading the consistent-hash-tests.yaml config for 'consistent_hash' tests.")
+  {
+    // load the configuration strtegies.
+    std::shared_ptr<NextHopSelectionStrategy> strategy;
+    NextHopStrategyFactory nhf(TS_SRC_DIR "unit-tests/consistent-hash-tests.yaml");
+    strategy = nhf.strategyInstance("ignore-self-detect-false");
+
+    HostStatus &hs = HostStatus::instance();
+    hs.setHostStatus("localhost", HostStatus_t::HOST_STATUS_DOWN, 0, Reason::SELF_DETECT);
+
+    WHEN("the config is loaded.")
+    {
+      THEN("then testing consistent hash.")
+      {
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+        REQUIRE(strategy->groups == 2);
+      }
+    }
+
+    WHEN("requests are received.")
+    {
+      THEN("when making requests to localhost.")
+      {
+        HttpSM sm;
+        ParentResult *result = &sm.t_state.parent_result;
+        TSHttpTxn txnp       = reinterpret_cast<TSHttpTxn>(&sm);
+
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+
+        build_request(10001, &sm, nullptr, "rabbit.net", nullptr);
+        result->reset();
+        strategy->findNextHop(txnp);
+        CHECK(result->result == ParentResultType::PARENT_DIRECT);
+        CHECK(result->hostname == nullptr);
+      }
+    }
+  }
+}
+
+SCENARIO("Testing NextHop ignore_self_detect true", "[NextHopConsistentHash]")
+{
+  // We need this to build a HdrHeap object in build_request();
+  // No thread setup, forbid use of thread local allocators.
+  cmd_disable_pfreelist = true;
+  // Get all of the HTTP WKS items populated.
+  http_init();
+
+  GIVEN("Loading the consistent-hash-tests.yaml config for 'consistent_hash' tests.")
+  {
+    // load the configuration strtegies.
+    std::shared_ptr<NextHopSelectionStrategy> strategy;
+    NextHopStrategyFactory nhf(TS_SRC_DIR "unit-tests/consistent-hash-tests.yaml");
+    strategy = nhf.strategyInstance("ignore-self-detect-true");
+
+    HostStatus &hs = HostStatus::instance();
+    hs.setHostStatus("localhost", HostStatus_t::HOST_STATUS_DOWN, 0, Reason::SELF_DETECT);
+
+    WHEN("the config is loaded.")
+    {
+      THEN("then testing consistent hash.")
+      {
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+        REQUIRE(strategy->groups == 2);
+      }
+    }
+
+    WHEN("requests are received.")
+    {
+      THEN("when making requests to localhost.")
+      {
+        HttpSM sm;
+        ParentResult *result = &sm.t_state.parent_result;
+        TSHttpTxn txnp       = reinterpret_cast<TSHttpTxn>(&sm);
+
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+        build_request(10001, &sm, nullptr, "rabbit.net", nullptr);
+        result->reset();
+        strategy->findNextHop(txnp);
+        CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
+        CHECK(strcmp(result->hostname, "localhost") == 0);
+        CHECK(result->port == 8000);
+      }
+    }
+  }
+}
+
+SCENARIO("Testing NextHopConsistentHash same host different port markdown", "[NextHopConsistentHash]")
+{
+  // We need this to build a HdrHeap object in build_request();
+  // No thread setup, forbid use of thread local allocators.
+  cmd_disable_pfreelist = true;
+  // Get all of the HTTP WKS items populated.
+  http_init();
+
+  GIVEN("Loading the consistent-hash-tests.yaml config for 'consistent_hash' tests.")
+  {
+    // load the configuration strtegies.
+    std::shared_ptr<NextHopSelectionStrategy> strategy;
+    NextHopStrategyFactory nhf(TS_SRC_DIR "unit-tests/consistent-hash-tests.yaml");
+    strategy = nhf.strategyInstance("same-host-different-port");
+
+    WHEN("the config is loaded.")
+    {
+      THEN("then testing consistent hash.")
+      {
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+        REQUIRE(strategy->groups == 3);
+      }
+    }
+
+    WHEN("requests are received.")
+    {
+      THEN("when making requests and taking nodes down.")
+      {
+        HttpSM sm;
+        ParentResult *result = &sm.t_state.parent_result;
+        TSHttpTxn txnp       = reinterpret_cast<TSHttpTxn>(&sm);
+
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+
+        // first request.
+        build_request(10001, &sm, nullptr, "rabbit.net", nullptr);
+        result->reset();
+        strategy->findNextHop(txnp);
+
+        CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
+        CHECK(strcmp(result->hostname, "localhost") == 0);
+        CHECK(result->port == 8000);
+
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
+
+        build_request(10002, &sm, nullptr, "rabbit.net", nullptr);
+        strategy->findNextHop(txnp);
+
+        CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
+        CHECK(strcmp(result->hostname, "localhost") == 0);
+        CHECK(result->port == 8002);
+
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
+
+        build_request(10003, &sm, nullptr, "rabbit.net", nullptr);
+        strategy->findNextHop(txnp);
+
+        CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
+        CHECK(strcmp(result->hostname, "localhost") == 0);
+        CHECK(result->port == 8004);
+      }
+    }
+  }
+}
+
+SCENARIO("Testing NextHopConsistentHash hash_string override", "[NextHopConsistentHash]")
+{
+  // We need this to build a HdrHeap object in build_request();
+  // No thread setup, forbid use of thread local allocators.
+  cmd_disable_pfreelist = true;
+  // Get all of the HTTP WKS items populated.
+  http_init();
+
+  GIVEN("Loading the consistent-hash-tests.yaml config for 'consistent_hash' tests.")
+  {
+    // load the configuration strtegies.
+    std::shared_ptr<NextHopSelectionStrategy> strategy;
+    NextHopStrategyFactory nhf(TS_SRC_DIR "unit-tests/consistent-hash-tests.yaml");
+    strategy = nhf.strategyInstance("hash-string-override");
+
+    WHEN("the config is loaded.")
+    {
+      THEN("then testing consistent hash.")
+      {
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+        REQUIRE(strategy->groups == 2);
+      }
+    }
+
+    WHEN("requests are received.")
+    {
+      THEN("when making requests and taking nodes down.")
+      {
+        HttpSM sm;
+        ParentResult *result = &sm.t_state.parent_result;
+        TSHttpTxn txnp       = reinterpret_cast<TSHttpTxn>(&sm);
+
+        REQUIRE(nhf.strategies_loaded == true);
+        REQUIRE(strategy != nullptr);
+
+        build_request(10001, &sm, nullptr, "rabbit.net", nullptr);
+        result->reset();
+        strategy->findNextHop(txnp);
+
+        // We happen to know that 'foo.test' will be first if the hostname is the hash
+        // and foo.test will be first for the hash 'first' and the bar.test hash 'second'.
+        // So, if the hash_string override isn't getting applied, this will fail.
+        CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
+        CHECK(strcmp(result->hostname, "bar.test") == 0);
+        CHECK(result->port == 80);
+
+        strategy->markNextHop(txnp, result->hostname, result->port, NH_MARK_DOWN);
+
+        build_request(10002, &sm, nullptr, "rabbit.net", nullptr);
+        strategy->findNextHop(txnp);
+
+        CHECK(strcmp(result->hostname, "foo.test") == 0);
+        CHECK(result->port == 80);
+      }
+    }
+  }
+}
+
 SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 'consistent_hash'", "[NextHopConsistentHash]")
 {
   // We need this to build a HdrHeap object in build_request();

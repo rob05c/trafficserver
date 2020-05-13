@@ -184,18 +184,34 @@ Machine::is_self(const char *name)
 
 HostStatRec::HostStatRec(){};
 HostStatus::HostStatus() {}
-HostStatus::~HostStatus(){};
+
+HostStatus::~HostStatus() {
+  for (auto i = this->hosts_statuses.begin(); i != this->hosts_statuses.end(); ++i) {
+    delete i->second;
+  }
+}
+
 HostStatRec *
 HostStatus::getHostStatus(const char *name)
 {
-  // for unit tests only, always return a record with HOST_STATUS_UP
-  static HostStatRec rec;
-  rec.status = HostStatus_t::HOST_STATUS_UP;
-  return &rec;
+  if (this->hosts_statuses[name] == nullptr) {
+    // for unit tests only, always return a record with HOST_STATUS_UP, if it wasn't set with setHostStatus
+    static HostStatRec rec;
+    rec.status = HostStatus_t::HOST_STATUS_UP;
+    return &rec;
+  }
+  return this->hosts_statuses[name];
 }
+
 void
-HostStatus::setHostStatus(char const *host, HostStatus_t status, unsigned int, unsigned int)
+HostStatus::setHostStatus(char const *host, HostStatus_t status, unsigned int down_time, unsigned int reason)
 {
+  if (this->hosts_statuses[host] == nullptr) {
+    this->hosts_statuses[host] = new(HostStatRec);
+  }
+  this->hosts_statuses[host]->status = status;
+  this->hosts_statuses[host]->reasons = reason;
+  this->hosts_statuses[host]->local_down_time = down_time;
   NH_Debug("next_hop", "setting host status for '%s' to %s", host, HostStatusNames[status]);
 }
 

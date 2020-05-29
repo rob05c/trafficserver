@@ -169,7 +169,7 @@ SCENARIO("Testing NextHopConsistentHash class, using policy 'consistent_hash'", 
         // eighth request - reusing the ParentResult from the last request
         // simulating a failure triggers a search for another parent, not firstcall.
         build_request(10008, &sm, nullptr, "rabbit.net", nullptr);
-        strategy->findNextHop(txnp, nullptr, now);
+        strategy->findNextHop(txnp, now);
         CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
         CHECK(strcmp(result->hostname, "q2.bar.com") == 0);
       }
@@ -268,7 +268,7 @@ SCENARIO("Testing NextHopConsistentHash class (all firstcalls), using policy 'co
         time_t now = time(nullptr) + 5;
         result->reset();
         build_request(20006, &sm, nullptr, "rabbit.net", nullptr);
-        strategy->findNextHop(txnp, nullptr, now);
+        strategy->findNextHop(txnp, now);
         CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
         CHECK(strcmp(result->hostname, "p1.foo.com") == 0);
       }
@@ -293,7 +293,7 @@ SCENARIO("Testing NextHop ignore_self_detect false", "[NextHopConsistentHash]")
     strategy = nhf.strategyInstance("ignore-self-detect-false");
 
     HostStatus &hs = HostStatus::instance();
-    hs.setHostStatus("localhost", HostStatus_t::HOST_STATUS_DOWN, 0, Reason::SELF_DETECT);
+    hs.setHostStatus("localhost", TSHostStatus::TS_HOST_STATUS_DOWN, 0, Reason::SELF_DETECT);
 
     WHEN("the config is loaded.")
     {
@@ -342,7 +342,7 @@ SCENARIO("Testing NextHop ignore_self_detect true", "[NextHopConsistentHash]")
     strategy = nhf.strategyInstance("ignore-self-detect-true");
 
     HostStatus &hs = HostStatus::instance();
-    hs.setHostStatus("localhost", HostStatus_t::HOST_STATUS_DOWN, 0, Reason::SELF_DETECT);
+    hs.setHostStatus("localhost", TSHostStatus::TS_HOST_STATUS_DOWN, 0, Reason::SELF_DETECT);
 
     WHEN("the config is loaded.")
     {
@@ -603,7 +603,7 @@ SCENARIO("Testing NextHopConsistentHash class (alternating rings), using policy 
         time_t now = time(nullptr) + 5;
         result->reset();
         build_request(30008, &sm, nullptr, "bunny.net/asset4", nullptr);
-        strategy->findNextHop(txnp, nullptr, now);
+        strategy->findNextHop(txnp, now);
         CHECK(result->result == ParentResultType::PARENT_SPECIFIED);
         CHECK(strcmp(result->hostname, "c2.foo.com") == 0);
       }

@@ -93,6 +93,7 @@ public:
   void decInstanceCount();
   int instanceCount();
   bool isDynamicReloadEnabled() const;
+  virtual fs::path configPath() const;
 
   class LoadedPlugins : public RefCountObj
   {

@@ -707,8 +707,8 @@ public:
     bool first_dns_lookup                             = true;
 
     HttpRequestData request_data;
-    ParentConfigParams *parent_params                           = nullptr;
-    std::shared_ptr<NextHopSelectionStrategy> next_hop_strategy = nullptr;
+    ParentConfigParams *parent_params                             = nullptr;
+    std::shared_ptr<TSNextHopSelectionStrategy> next_hop_strategy = nullptr;
     ParentResult parent_result;
     CacheControlResult cache_control;
     CacheLookupResult_t cache_lookup_result = CACHE_LOOKUP_NONE;

@@ -140,14 +140,14 @@ SCENARIO("Testing NextHopRoundRobin class, using policy 'rr-strict'", "[NextHopR
         // ninth request, p1 and p2 are still down, should get p2.foo.com as it will be retried
         build_request(10010, &sm, nullptr, "rabbit.net", nullptr);
         result->reset();
-        strategy->findNextHop(txnp, nullptr, now);
+        strategy->findNextHop(txnp, now);
         REQUIRE(result->result == ParentResultType::PARENT_SPECIFIED);
         CHECK(strcmp(result->hostname, "p2.foo.com") == 0);
 
         // tenth request, p1 should now be retried.
         build_request(10011, &sm, nullptr, "rabbit.net", nullptr);
         result->reset();
-        strategy->findNextHop(txnp, nullptr, now);
+        strategy->findNextHop(txnp, now);
         REQUIRE(result->result == ParentResultType::PARENT_SPECIFIED);
         CHECK(strcmp(result->hostname, "p1.foo.com") == 0);
       }
@@ -210,7 +210,7 @@ SCENARIO("Testing NextHopRoundRobin class, using policy 'first-live'", "[NextHop
         // fourth request, p1 should be marked for retry
         build_request(10015, &sm, nullptr, "rabbit.net", nullptr);
         result->reset();
-        strategy->findNextHop(txnp, nullptr, now);
+        strategy->findNextHop(txnp, now);
         CHECK(strcmp(result->hostname, "p1.foo.com") == 0);
       }
     }

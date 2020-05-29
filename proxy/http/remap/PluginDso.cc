@@ -361,4 +361,10 @@ PluginDso::LoadedPlugins::indicatePostReload(bool reloadSuccessful, const std::u
   }
 }
 
+fs::path
+PluginDso::configPath() const
+{
+	return _configPath;
+}
+
 Ptr<PluginDso::LoadedPlugins> PluginDso::_plugins;

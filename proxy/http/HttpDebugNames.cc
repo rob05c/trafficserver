@@ -494,6 +494,11 @@ HttpDebugNames::get_action_name(HttpTransact::StateMachineAction_t e)
     return ("SM_ACTION_API_POST_REMAP");
   case HttpTransact::SM_ACTION_POST_REMAP_SKIP:
     return ("SM_ACTION_POST_REMAP_SKIP");
+
+  case HttpTransact::SM_ACTION_FIND_NEXT_HOP:
+    return ("SM_ACTION_FIND_NEXT_HOP");
+  case HttpTransact::SM_ACTION_AFTER_FIND_NEXT_HOP:
+    return ("SM_ACTION_AFTER_FIND_NEXT_HOP");
   }
 
   return ("unknown state name");
@@ -608,6 +613,10 @@ HttpDebugNames::get_api_hook_name(TSHttpHookID t)
     return "TS_VCONN_OUTBOUND_START_HOOK";
   case TS_VCONN_OUTBOUND_CLOSE_HOOK:
     return "TS_VCONN_OUTBOUND_CLOSE_HOOK";
+  case TS_HTTP_FIND_NEXT_HOP_HOOK:
+    return "TS_HTTP_FIND_NEXT_HOP_HOOK";
+  case TS_HTTP_AFTER_FIND_NEXT_HOP_HOOK:
+    return "TS_HTTP_AFTER_FIND_NEXT_HOP_HOOK";
   }
 
   return "unknown hook";

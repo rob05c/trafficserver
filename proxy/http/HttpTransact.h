@@ -421,7 +421,10 @@ public:
 
     SM_ACTION_REMAP_REQUEST,
     SM_ACTION_POST_REMAP_SKIP,
-    SM_ACTION_REDIRECT_READ
+    SM_ACTION_REDIRECT_READ,
+
+    SM_ACTION_FIND_NEXT_HOP,
+    SM_ACTION_AFTER_FIND_NEXT_HOP
   };
 
   enum TransferEncoding_t {
@@ -660,6 +663,22 @@ public:
     _SquidLogInfo() {}
   } SquidLogInfo;
 
+  enum FindNextHopPostAction_t {
+    FIND_NEXT_HOP_POST_ACTION_NONE = 0,
+    FIND_NEXT_HOP_POST_ACTION_CHECK_UNCACHEABLE,
+    FIND_NEXT_HOP_POST_ACTION_DNS_LOOKUP
+  };
+
+  enum FindNextHopCaller_t {
+    FIND_NEXT_HOP_CALLER_NONE = 0,
+    FIND_NEXT_HOP_CALLER_PPDNS_LOOKUP,
+    FIND_NEXT_HOP_CALLER_LOOKUP_SKIP_OPEN_SERVER,
+    FIND_NEXT_HOP_CALLER_HANDLE_CACHE_OPEN_READ_HIT,
+    FIND_NEXT_HOP_CALLER_HANDLE_CACHE_OPEN_READ_MISS,
+    FIND_NEXT_HOP_CALLER_HANDLE_RESPONSE_FROM_PARENT_PARENT_RETRY,
+    FIND_NEXT_HOP_CALLER_HANDLE_RESPONSE_FROM_PARENT_NO_LIVE_CONNECTION
+  };
+
   struct State {
     HttpTransactMagic_t m_magic = HTTP_TRANSACT_MAGIC_ALIVE;
 
@@ -821,6 +840,14 @@ public:
     bool transparent_passthrough = false;
     bool range_in_cache          = false;
 
+    // NextHop related variables
+    FindNextHopPostAction_t find_next_hop_post_action = FIND_NEXT_HOP_POST_ACTION_NONE;
+    FindNextHopCaller_t     find_next_hop_caller = FIND_NEXT_HOP_CALLER_NONE;
+    LookingUp_t             find_server_looking_up = UNDEFINED_LOOKUP;
+    bool                    pre_nexthop_read_hit_response_returnable = false;
+    bool                    pre_nexthop_read_hit_send_revalidate = false;
+    bool                    after_nexthop_read_hit_server_up = true;
+
     // Methods
     void
     init()
@@ -920,7 +947,6 @@ public:
   private:
     // Make this a raw byte array, so it will be accessed through the my_txn_conf() member function.
     alignas(OverridableHttpConfigParams) char _my_txn_conf[sizeof(OverridableHttpConfigParams)];
-
   }; // End of State struct.
 
   static void HandleBlindTunnel(State *s);
@@ -943,19 +969,31 @@ public:
   static void PostInactiveTimeoutResponse(State *s);
   static void DecideCacheLookup(State *s);
   static void LookupSkipOpenServer(State *s);
+  static void LookupSkipOpenServerAfterNexthop(State *s);
+
+  static void FindNextHopPostActionDnsLookup(State *s);
+  static void FindNextHopPostActionCheckUncacheable(State *s);
 
   static void CallOSDNSLookup(State *s);
   static void OSDNSLookup(State *s);
   static void ReDNSRoundRobin(State *s);
   static void PPDNSLookup(State *s);
+  static void PPDNSLookupAfterNexthop(State *s);
+  static void PPDNSLookupAfterLookup(State *s);
   static void OriginServerRawOpen(State *s);
   static void HandleCacheOpenRead(State *s);
   static void HandleCacheOpenReadHitFreshness(State *s);
   static void HandleCacheOpenReadHit(State *s);
+  static void HandleCacheOpenReadHitAfterReval(State *s);
+  static void HandleCacheOpenReadHitAfterNexthop(State *s);
   static void HandleCacheOpenReadMiss(State *s);
+  static void HandleCacheOpenReadMissAfterNexthop(State *s);
   static void build_response_from_cache(State *s, HTTPWarningCode warning_code);
   static void handle_cache_write_lock(State *s);
   static void HandleResponse(State *s);
+  static void HandleResponseFromParentAfterState(State *s);
+  static void HandleResponseFromParentAfterNexthopParentRetry(State *s);
+  static void HandleResponseFromParentAfterNexthopNoLiveConnection(State *s);
   static void HandleUpdateCachedObject(State *s);
   static void HandleUpdateCachedObjectContinue(State *s);
   static void HandleStatPage(State *s);
@@ -989,6 +1027,9 @@ public:
   static void HandlePushTunnelFailure(State *s);
   static void HandlePushError(State *s, const char *reason);
   static void HandleBadPushRespHdr(State *s);
+
+  static void FindNextHop(State *s);
+  static void AfterFindNextHop(State *s);
 
   // Utility Methods
   static void issue_revalidate(State *s);

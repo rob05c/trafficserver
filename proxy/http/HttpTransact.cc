@@ -175,15 +175,13 @@ retry_type(HttpTransact::State *s)
 // wrapper to choose between a remap next hop strategy or use parent.config
 // remap next hop strategy is preferred
 inline static void
-findParent(HttpTransact::State *s)
+findNextHop(HttpTransact::State *s)
 {
   url_mapping *mp = s->url_map.getMapping();
-
   if (mp && mp->strategy) {
     return mp->strategy->findNextHop(reinterpret_cast<TSHttpTxn>(s->state_machine));
   } else if (s->parent_params) {
-    return s->parent_params->findParent(&s->request_data, &s->parent_result, s->txn_conf->parent_fail_threshold,
-                                        s->txn_conf->parent_retry_time);
+    return s->parent_params->findNextHop(&s->request_data, &s->parent_result, s->txn_conf->parent_fail_threshold, s->txn_conf->parent_retry_time);
   }
 }
 
@@ -229,21 +227,6 @@ parentExists(HttpTransact::State *s)
     return s->parent_params->parentExists(&s->request_data);
   }
   return false;
-}
-
-// wrapper to choose between a remap next hop strategy or use parent.config
-// remap next hop strategy is preferred
-inline static void
-nextParent(HttpTransact::State *s)
-{
-  url_mapping *mp = s->url_map.getMapping();
-  if (mp && mp->strategy) {
-    // NextHop only has a findNextHop() function.
-    return mp->strategy->findNextHop(reinterpret_cast<TSHttpTxn>(s->state_machine));
-  } else if (s->parent_params) {
-    return s->parent_params->nextParent(&s->request_data, &s->parent_result, s->txn_conf->parent_fail_threshold,
-                                        s->txn_conf->parent_retry_time);
-  }
 }
 
 inline static bool
@@ -524,11 +507,22 @@ is_negative_caching_appropriate(HttpTransact::State *s)
   }
 }
 
-inline static HttpTransact::LookingUp_t
-find_server_and_update_current_info(HttpTransact::State *s)
+// find_server_and_update_current_info finds the next-hop server and updates the current info.
+//
+// This transitions the State. It MUST be the last call in the calling state, and
+// will set s->next_action to either SM_ACTION_FIND_NEXT_HOP,
+// or SM_ACTION_AFTER_FIND_NEXT_HOP if no find was necessary.
+//
+// Callers MUST set s->find_next_hop_caller to the appropriate return location,
+// so the FIND_NEXT_HOP state will return back to whatever state needed a next-hop.
+//
+inline static void
+find_server_and_update_current_info(HttpTransact::State *s, HttpTransact::FindNextHopCaller_t caller)
 {
   int host_len;
   const char *host = s->hdr_info.client_request.host_get(&host_len);
+
+  s->find_next_hop_caller = caller;
 
   if (is_localhost(host, host_len)) {
     // Do not forward requests to local_host onto a parent.
@@ -537,15 +531,8 @@ find_server_and_update_current_info(HttpTransact::State *s)
     TxnDebug("http_trans", "request is from localhost, so bypass parent");
     s->parent_result.result = PARENT_DIRECT;
   } else if (s->method == HTTP_WKSIDX_CONNECT && s->http_config_param->disable_ssl_parenting) {
-    if (s->parent_result.result == PARENT_SPECIFIED) {
-      nextParent(s);
-    } else {
-      findParent(s);
-    }
-    if (!s->parent_result.is_some() || is_api_result(s) || parent_is_proxy(s)) {
-      TxnDebug("http_trans", "request not cacheable, so bypass parent");
-      s->parent_result.result = PARENT_DIRECT;
-    }
+    s->find_next_hop_post_action = HttpTransact::FIND_NEXT_HOP_POST_ACTION_CHECK_UNCACHEABLE;
+    TRANSACT_RETURN(HttpTransact::SM_ACTION_FIND_NEXT_HOP, HttpTransact::FindNextHop);
   } else if (s->txn_conf->uncacheable_requests_bypass_parent && s->http_config_param->no_dns_forward_to_parent == 0 &&
              !HttpTransact::is_request_cache_lookupable(s)) {
     // request not lookupable and cacheable, so bypass parent if the parent is not an origin server.
@@ -554,32 +541,16 @@ find_server_and_update_current_info(HttpTransact::State *s)
     // we are assuming both child and parent have similar configuration
     // with respect to whether a request is cacheable or not.
     // For example, the cache_urls_that_look_dynamic variable.
-    if (s->parent_result.result == PARENT_SPECIFIED) {
-      nextParent(s);
-    } else {
-      findParent(s);
-    }
-    if (!s->parent_result.is_some() || is_api_result(s) || parent_is_proxy(s)) {
-      TxnDebug("http_trans", "request not cacheable, so bypass parent");
-      s->parent_result.result = PARENT_DIRECT;
-    }
+    s->find_next_hop_post_action = HttpTransact::FIND_NEXT_HOP_POST_ACTION_CHECK_UNCACHEABLE;
+    TRANSACT_RETURN(HttpTransact::SM_ACTION_FIND_NEXT_HOP, HttpTransact::FindNextHop);
   } else {
     switch (s->parent_result.result) {
     case PARENT_UNDEFINED:
-      findParent(s);
-      break;
+      s->find_next_hop_post_action = HttpTransact::FIND_NEXT_HOP_POST_ACTION_NONE;
+      TRANSACT_RETURN(HttpTransact::SM_ACTION_FIND_NEXT_HOP, HttpTransact::FindNextHop);
     case PARENT_SPECIFIED:
-      nextParent(s);
-
-      // Hack!
-      // We already have a parent that failed, if we are now told
-      //  to go the origin server, we can only obey this if we
-      //  dns'ed the origin server
-      if (s->parent_result.result == PARENT_DIRECT && s->http_config_param->no_dns_forward_to_parent != 0) {
-        ink_assert(!s->server_info.dst_addr.isValid());
-        s->parent_result.result = PARENT_FAIL;
-      }
-      break;
+      s->find_next_hop_post_action = HttpTransact::FIND_NEXT_HOP_POST_ACTION_DNS_LOOKUP;
+      TRANSACT_RETURN(HttpTransact::SM_ACTION_FIND_NEXT_HOP, HttpTransact::FindNextHop);
     case PARENT_FAIL:
       // Check to see if should bypass the parent and go direct
       //   We can only do this if
@@ -602,6 +573,56 @@ find_server_and_update_current_info(HttpTransact::State *s)
     }
   }
 
+  // we didn't actually need to FindNextHop for some reason,
+  // so just skip directly to the AfterFindNextHop state.
+  TRANSACT_RETURN(HttpTransact::SM_ACTION_AFTER_FIND_NEXT_HOP, HttpTransact::AfterFindNextHop);
+  return;
+}
+
+// This state finding the next hop, for whatever needs it.
+//
+// This is designed to be a Remap Plugin Hook.
+//
+// Callers may set s->find_next_hop_post_action if anything is necessary
+// for core to do after the finding (which may be done by a plugin).
+//
+// Callers must set s->find_next_hop_caller so AfterFindNextHop knows where to return.
+//
+void
+HttpTransact::FindNextHop(State *s)
+{
+  TxnDebug("http_trans", "finding next hop");
+  findNextHop(s);
+  s->next_action = HttpTransact::SM_ACTION_AFTER_FIND_NEXT_HOP;
+  return;
+}
+
+void
+HttpTransact::FindNextHopPostActionCheckUncacheable(HttpTransact::State *s)
+{
+  if (!s->parent_result.is_some() || is_api_result(s) || parent_is_proxy(s)) {
+    TxnDebug("http_trans", "request not cacheable, so bypass parent");
+    s->parent_result.result = PARENT_DIRECT;
+  }
+}
+
+void
+HttpTransact::FindNextHopPostActionDnsLookup(HttpTransact::State *s)
+{
+  // Hack!
+  // We already have a parent that failed, if we are now told
+  //  to go the origin server, we can only obey this if we
+  //  dns'ed the origin server
+  if (s->parent_result.result == PARENT_DIRECT && s->http_config_param->no_dns_forward_to_parent != 0) {
+    ink_assert(!s->server_info.dst_addr.isValid());
+    s->parent_result.result = PARENT_FAIL;
+  }
+}
+
+// TODO give this a better name
+inline static HttpTransact::LookingUp_t
+find_server_and_update_current_info_update_info(HttpTransact::State *s)
+{
   switch (s->parent_result.result) {
   case PARENT_SPECIFIED:
     s->parent_info.name = s->arena.str_store(s->parent_result.hostname, strlen(s->parent_result.hostname));
@@ -632,6 +653,60 @@ find_server_and_update_current_info(HttpTransact::State *s)
     s->next_hop_scheme = s->scheme;
     return HttpTransact::ORIGIN_SERVER;
   }
+}
+
+inline static void
+after_find_next_hop_return(HttpTransact::State *s)
+{
+  TxnDebug("http_trans", "after finding next hop returning to caller");
+  switch (s->find_next_hop_caller) {
+  case HttpTransact::FIND_NEXT_HOP_CALLER_PPDNS_LOOKUP:
+    HttpTransact::PPDNSLookupAfterNexthop(s);
+    return;
+  case HttpTransact::FIND_NEXT_HOP_CALLER_LOOKUP_SKIP_OPEN_SERVER:
+    HttpTransact::LookupSkipOpenServerAfterNexthop(s);
+    return;
+  case HttpTransact::FIND_NEXT_HOP_CALLER_HANDLE_CACHE_OPEN_READ_HIT:
+    HttpTransact::HandleCacheOpenReadHitAfterNexthop(s);
+    return;
+  case HttpTransact::FIND_NEXT_HOP_CALLER_HANDLE_CACHE_OPEN_READ_MISS:
+    HttpTransact::HandleCacheOpenReadMissAfterNexthop(s);
+    return;
+  case HttpTransact::FIND_NEXT_HOP_CALLER_HANDLE_RESPONSE_FROM_PARENT_PARENT_RETRY:
+    HttpTransact::HandleResponseFromParentAfterNexthopParentRetry(s);
+    return;
+  case HttpTransact::FIND_NEXT_HOP_CALLER_HANDLE_RESPONSE_FROM_PARENT_NO_LIVE_CONNECTION:
+    HttpTransact::HandleResponseFromParentAfterNexthopNoLiveConnection(s);
+    return;
+  default:
+    ink_assert(!"not reached: no find_next_hop_caller");
+  }
+}
+
+// This state is after the FindNextHop, doing any post-find stuff,
+// before returning to whatever needed to find the next hop.
+void
+HttpTransact::AfterFindNextHop(State *s)
+{
+  TxnDebug("http_trans", "after finding next hop");
+
+  switch (s->find_next_hop_post_action) {
+    case HttpTransact::FIND_NEXT_HOP_POST_ACTION_CHECK_UNCACHEABLE:
+      FindNextHopPostActionCheckUncacheable(s);
+      break;
+    case HttpTransact::FIND_NEXT_HOP_POST_ACTION_DNS_LOOKUP:
+      FindNextHopPostActionDnsLookup(s);
+      break;
+    case FIND_NEXT_HOP_POST_ACTION_NONE:
+      break;
+    default:
+      ink_assert(!"not reached: unknown find_next_hop_post_action");
+  }
+
+  s->find_server_looking_up = find_server_and_update_current_info_update_info(s);
+
+  after_find_next_hop_return(s);
+  return;
 }
 
 inline static bool
@@ -1724,36 +1799,56 @@ HttpTransact::PPDNSLookup(State *s)
     // Mark parent as down due to resolving failure
     markParentDown(s);
     // DNS lookup of parent failed, find next parent or o.s.
-    if (find_server_and_update_current_info(s) == HttpTransact::HOST_NONE) {
-      ink_assert(s->current.request_to == HOST_NONE);
-      handle_parent_died(s);
-      return;
-    }
 
-    if (!s->current.server->dst_addr.isValid()) {
-      if (s->current.request_to == PARENT_PROXY) {
-        TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
-      } else if (s->parent_result.result == PARENT_DIRECT && s->http_config_param->no_dns_forward_to_parent != 1) {
-        // We ran out of parents but parent configuration allows us to go to Origin Server directly
-        return CallOSDNSLookup(s);
-      } else {
-        // We could be out of parents here if all the parents failed DNS lookup
-        ink_assert(s->current.request_to == HOST_NONE);
-        handle_parent_died(s);
-      }
-      return;
-    }
-  } else {
-    // lookup succeeded, open connection to p.p.
-    ats_ip_copy(&s->parent_info.dst_addr, s->host_db_info.ip());
-    s->parent_info.dst_addr.port() = htons(s->parent_result.port);
-    get_ka_info_from_host_db(s, &s->parent_info, &s->client_info, &s->host_db_info);
-
-    char addrbuf[INET6_ADDRSTRLEN];
-    TxnDebug("http_trans", "[PPDNSLookup] DNS lookup for sm_id[%" PRId64 "] successful IP: %s", s->state_machine->sm_id,
-             ats_ip_ntop(&s->parent_info.dst_addr.sa, addrbuf, sizeof(addrbuf)));
+    find_server_and_update_current_info(s, FIND_NEXT_HOP_CALLER_PPDNS_LOOKUP);
+    return; // find_server_and_update_current_info transitions the state
   }
 
+  // lookup succeeded, open connection to p.p.
+  ats_ip_copy(&s->parent_info.dst_addr, s->host_db_info.ip());
+  s->parent_info.dst_addr.port() = htons(s->parent_result.port);
+  get_ka_info_from_host_db(s, &s->parent_info, &s->client_info, &s->host_db_info);
+
+  char addrbuf[INET6_ADDRSTRLEN];
+  TxnDebug("http_trans", "[PPDNSLookup] DNS lookup for sm_id[%" PRId64 "] successful IP: %s", s->state_machine->sm_id,
+           ats_ip_ntop(&s->parent_info.dst_addr.sa, addrbuf, sizeof(addrbuf)));
+
+  PPDNSLookupAfterLookup(s);
+}
+
+// PPDNSLookupAfterNexthop is called by the AfterFindNextHop state,
+// after a FindNextHop for PPDNSLookup.
+void
+HttpTransact::PPDNSLookupAfterNexthop(State *s)
+{
+  const LookingUp_t requestTo = s->find_server_looking_up;
+  if (requestTo == HttpTransact::HOST_NONE) {
+    ink_assert(s->current.request_to == HOST_NONE);
+    handle_parent_died(s);
+    return;
+  }
+
+  if (!s->current.server->dst_addr.isValid()) {
+    if (s->current.request_to == PARENT_PROXY) {
+      TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
+    } else if (s->parent_result.result == PARENT_DIRECT && s->http_config_param->no_dns_forward_to_parent != 1) {
+      // We ran out of parents but parent configuration allows us to go to Origin Server directly
+      return CallOSDNSLookup(s);
+    } else {
+      // We could be out of parents here if all the parents failed DNS lookup
+      ink_assert(s->current.request_to == HOST_NONE);
+      handle_parent_died(s);
+    }
+    return;
+  }
+
+  PPDNSLookupAfterLookup(s);
+}
+
+// PPDNSLookupAfterLookup has shared logic by PPDNSLookup, needed by both itself (if there was no nexthop lookup) and the returned-to function after a NextHop lookup.
+void
+HttpTransact::PPDNSLookupAfterLookup(State *s)
+{
   // Since this function can be called several times while retrying
   //  parents, check to see if we've already built our request
   if (!s->hdr_info.server_request.valid()) {
@@ -1770,6 +1865,7 @@ HttpTransact::PPDNSLookup(State *s)
   // what kind of a connection (raw, simple)
   s->next_action = how_to_open_connection(s);
 }
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -2145,8 +2241,12 @@ HttpTransact::LookupSkipOpenServer(State *s)
 {
   // cache will not be looked up. open a connection
   // to a parent proxy or to the origin server.
-  find_server_and_update_current_info(s);
+  find_server_and_update_current_info(s, FIND_NEXT_HOP_CALLER_LOOKUP_SKIP_OPEN_SERVER);
+}
 
+void
+HttpTransact::LookupSkipOpenServerAfterNexthop(State *s)
+{
   if (s->current.request_to == PARENT_PROXY) {
     TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
   } else if (s->parent_result.result == PARENT_FAIL) {
@@ -2165,6 +2265,7 @@ HttpTransact::LookupSkipOpenServer(State *s)
     TRANSACT_RETURN(next, HttpTransact::HandleResponse);
   }
 }
+
 
 //////////////////////////////////////////////////////////////////////////////
 // Name       : HandleCacheOpenReadPush
@@ -2717,7 +2818,6 @@ HttpTransact::HandleCacheOpenReadHit(State *s)
   bool needs_revalidate   = false;
   bool needs_authenticate = false;
   bool needs_cache_auth   = false;
-  bool server_up          = true;
   CacheHTTPInfo *obj;
 
   if (s->api_update_cached_object == HttpTransact::UPDATE_CACHED_OBJECT_CONTINUE) {
@@ -2790,109 +2890,122 @@ HttpTransact::HandleCacheOpenReadHit(State *s)
   // accept or conditionally accepts the PUT/POST requests.
   // anyhow, this is an overloaded function and will return false
   // if the origin server still has to be looked up.
-  bool response_returnable = is_cache_response_returnable(s);
+  s->pre_nexthop_read_hit_response_returnable = is_cache_response_returnable(s);
 
   // do we need to revalidate. in other words if the response
   // has to be authorized, is stale or can not be returned, do
   // a revalidate.
-  bool send_revalidate = (needs_authenticate || needs_revalidate || !response_returnable);
+  s->pre_nexthop_read_hit_send_revalidate = (needs_authenticate || needs_revalidate || !s->pre_nexthop_read_hit_response_returnable);
 
   if (needs_cache_auth == true) {
     SET_VIA_STRING(VIA_DETAIL_CACHE_LOOKUP, VIA_DETAIL_MISS_EXPIRED);
-    s->www_auth_content = send_revalidate ? CACHE_AUTH_STALE : CACHE_AUTH_FRESH;
-    send_revalidate     = true;
+    s->www_auth_content = s->pre_nexthop_read_hit_send_revalidate ? CACHE_AUTH_STALE : CACHE_AUTH_FRESH;
+    s->pre_nexthop_read_hit_send_revalidate     = true;
   }
 
   TxnDebug("http_trans", "CacheOpenRead --- needs_auth          = %d", needs_authenticate);
   TxnDebug("http_trans", "CacheOpenRead --- needs_revalidate    = %d", needs_revalidate);
-  TxnDebug("http_trans", "CacheOpenRead --- response_returnable = %d", response_returnable);
+  TxnDebug("http_trans", "CacheOpenRead --- response_returnable = %d", s->pre_nexthop_read_hit_response_returnable);
   TxnDebug("http_trans", "CacheOpenRead --- needs_cache_auth    = %d", needs_cache_auth);
-  TxnDebug("http_trans", "CacheOpenRead --- send_revalidate     = %d", send_revalidate);
+  TxnDebug("http_trans", "CacheOpenRead --- send_revalidate     = %d", s->pre_nexthop_read_hit_send_revalidate);
 
-  if (send_revalidate) {
+  if (s->pre_nexthop_read_hit_send_revalidate) {
     TxnDebug("http_trans", "CacheOpenRead --- HIT-STALE");
 
     TxnDebug("http_seq", "[HttpTransact::HandleCacheOpenReadHit] "
                          "Revalidate document with server");
 
-    find_server_and_update_current_info(s);
+    find_server_and_update_current_info(s, FIND_NEXT_HOP_CALLER_HANDLE_CACHE_OPEN_READ_HIT);
+    // find_server_and_update_current_info will transition the state,
+    // and call HandleCacheOpenReadHitAfterNexthop after the nextHop lookup
+    return;
+  }
+  HandleCacheOpenReadHitAfterReval(s);
+}
 
-    // We do not want to try to revalidate documents if we think
-    //  the server is down due to the something report problem
-    //
-    // Note: we only want to skip origin servers because 1)
-    //  parent proxies have their own negative caching
-    //  scheme & 2) If we skip down parents, every page
-    //  we serve is potentially stale
-    //
-    if (s->current.request_to == ORIGIN_SERVER && is_server_negative_cached(s) && response_returnable == true &&
-        is_stale_cache_response_returnable(s) == true) {
-      server_up = false;
+void
+HttpTransact::HandleCacheOpenReadHitAfterNexthop(State *s)
+{
+  s->after_nexthop_read_hit_server_up = true;
+  // We do not want to try to revalidate documents if we think
+  //  the server is down due to the something report problem
+  //
+  // Note: we only want to skip origin servers because 1)
+  //  parent proxies have their own negative caching
+  //  scheme & 2) If we skip down parents, every page
+  //  we serve is potentially stale
+  //
+  if (s->current.request_to == ORIGIN_SERVER && is_server_negative_cached(s) && s->pre_nexthop_read_hit_response_returnable && is_stale_cache_response_returnable(s) == true) {
+    s->after_nexthop_read_hit_server_up = false;
+    update_current_info(&s->current, nullptr, UNDEFINED_LOOKUP, 0);
+    TxnDebug("http_trans", "CacheOpenReadHit - server_down, returning stale document");
+  }
+  // a parent lookup could come back as PARENT_FAIL if in parent.config, go_direct == false and
+  // there are no available parents (all down).
+  else if (s->current.request_to == HOST_NONE && s->parent_result.result == PARENT_FAIL) {
+    if (is_server_negative_cached(s) && s->pre_nexthop_read_hit_response_returnable && is_stale_cache_response_returnable(s) == true) {
+      s->after_nexthop_read_hit_server_up = false;
       update_current_info(&s->current, nullptr, UNDEFINED_LOOKUP, 0);
       TxnDebug("http_trans", "CacheOpenReadHit - server_down, returning stale document");
-    }
-    // a parent lookup could come back as PARENT_FAIL if in parent.config, go_direct == false and
-    // there are no available parents (all down).
-    else if (s->current.request_to == HOST_NONE && s->parent_result.result == PARENT_FAIL) {
-      if (is_server_negative_cached(s) && response_returnable == true && is_stale_cache_response_returnable(s) == true) {
-        server_up = false;
-        update_current_info(&s->current, nullptr, UNDEFINED_LOOKUP, 0);
-        TxnDebug("http_trans", "CacheOpenReadHit - server_down, returning stale document");
-      } else {
-        handle_parent_died(s);
-        return;
-      }
-    }
-
-    if (server_up) {
-      // set a default version for the outgoing request
-      HTTPVersion http_version;
-
-      if (s->current.server != nullptr) {
-        bool check_hostdb = get_ka_info_from_config(s, s->current.server);
-        TxnDebug("http_trans", "CacheOpenReadHit - check_hostdb %d", check_hostdb);
-        if (check_hostdb || !s->current.server->dst_addr.isValid()) {
-          // We must be going a PARENT PROXY since so did
-          //  origin server DNS lookup right after state Start
-          //
-          // If we end up here in the release case just fall
-          //  through.  The request will fail because of the
-          //  missing ip but we won't take down the system
-          //
-          if (s->current.request_to == PARENT_PROXY) {
-            // Set ourselves up to handle pending revalidate issues
-            //  after the PP DNS lookup
-            ink_assert(s->pending_work == nullptr);
-            s->pending_work = issue_revalidate;
-
-            TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
-          } else if (s->current.request_to == ORIGIN_SERVER) {
-            return CallOSDNSLookup(s);
-          } else {
-            handle_parent_died(s);
-            return;
-          }
-        }
-        // override the default version with what the server has
-        http_version = s->current.server->http_version;
-      }
-
-      TxnDebug("http_trans", "CacheOpenReadHit - version %d", http_version.m_version);
-      build_request(s, &s->hdr_info.client_request, &s->hdr_info.server_request, http_version);
-
-      issue_revalidate(s);
-
-      // this can not be anything but a simple origin server connection.
-      // in other words, we would not have looked up the cache for a
-      // connect request, so the next action can not be origin_server_raw_open.
-      s->next_action = how_to_open_connection(s);
-
-      ink_release_assert(s->next_action != SM_ACTION_ORIGIN_SERVER_RAW_OPEN);
+    } else {
+      handle_parent_died(s);
       return;
-    } else { // server is down but stale response is returnable
-      SET_VIA_STRING(VIA_DETAIL_CACHE_TYPE, VIA_DETAIL_CACHE);
     }
   }
+
+  if (s->after_nexthop_read_hit_server_up) {
+    // set a default version for the outgoing request
+    HTTPVersion http_version;
+     if (s->current.server != nullptr) {
+      bool check_hostdb = get_ka_info_from_config(s, s->current.server);
+      TxnDebug("http_trans", "CacheOpenReadHit - check_hostdb %d", check_hostdb);
+      if (check_hostdb || !s->current.server->dst_addr.isValid()) {
+        // We must be going a PARENT PROXY since so did
+        //  origin server DNS lookup right after state Start
+        //
+        // If we end up here in the release case just fall
+        //  through.  The request will fail because of the
+        //  missing ip but we won't take down the system
+        //
+        if (s->current.request_to == PARENT_PROXY) {
+          // Set ourselves up to handle pending revalidate issues
+          //  after the PP DNS lookup
+          ink_assert(s->pending_work == nullptr);
+          s->pending_work = issue_revalidate;
+           TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
+        } else if (s->current.request_to == ORIGIN_SERVER) {
+          return CallOSDNSLookup(s);
+        } else {
+          handle_parent_died(s);
+          return;
+        }
+      }
+      // override the default version with what the server has
+      http_version = s->current.server->http_version;
+    }
+
+    TxnDebug("http_trans", "CacheOpenReadHit - version %d", http_version.m_version);
+    build_request(s, &s->hdr_info.client_request, &s->hdr_info.server_request, http_version);
+
+    issue_revalidate(s);
+
+    // this can not be anything but a simple origin server connection.
+    // in other words, we would not have looked up the cache for a
+    // connect request, so the next action can not be origin_server_raw_open.
+    s->next_action = how_to_open_connection(s);
+     ink_release_assert(s->next_action != SM_ACTION_ORIGIN_SERVER_RAW_OPEN);
+    return;
+  } else { // server is down but stale response is returnable
+    SET_VIA_STRING(VIA_DETAIL_CACHE_TYPE, VIA_DETAIL_CACHE);
+  }
+
+  HandleCacheOpenReadHitAfterReval(s);
+}
+
+void
+HttpTransact::HandleCacheOpenReadHitAfterReval(State *s)
+{
+
   // cache hit, document is fresh, does not authorization,
   // is valid, etc. etc. send it back to the client.
   //
@@ -2911,7 +3024,7 @@ HttpTransact::HandleCacheOpenReadHit(State *s)
   // realistically, if we can not make this claim, then there
   // is no reason to cache anything.
   //
-  ink_assert((send_revalidate == true && server_up == false) || (send_revalidate == false && server_up == true));
+  ink_assert((s->pre_nexthop_read_hit_send_revalidate == true && s->after_nexthop_read_hit_server_up == false) || (s->pre_nexthop_read_hit_send_revalidate == false && s->after_nexthop_read_hit_server_up == true));
 
   TxnDebug("http_trans", "CacheOpenRead --- HIT-FRESH");
   TxnDebug("http_seq", "[HttpTransact::HandleCacheOpenReadHit] "
@@ -2927,7 +3040,7 @@ HttpTransact::HandleCacheOpenReadHit(State *s)
   if (s->cache_lookup_result == CACHE_LOOKUP_HIT_WARNING) {
     build_response_from_cache(s, HTTP_WARNING_CODE_HERUISTIC_EXPIRATION);
   } else if (s->cache_lookup_result == CACHE_LOOKUP_HIT_STALE) {
-    ink_assert(server_up == false);
+    ink_assert(s->after_nexthop_read_hit_server_up == false);
     build_response_from_cache(s, HTTP_WARNING_CODE_REVALIDATION_FAILED);
   } else {
     build_response_from_cache(s, HTTP_WARNING_CODE_NONE);
@@ -3272,38 +3385,46 @@ HttpTransact::HandleCacheOpenReadMiss(State *s)
       s->server_info.http_version = HTTPVersion(0, 9);
       get_ka_info_from_config(s, &s->server_info);
     }
-    find_server_and_update_current_info(s);
-    // a parent lookup could come back as PARENT_FAIL if in parent.config go_direct == false and
-    // there are no available parents (all down).
-    if (s->parent_result.result == PARENT_FAIL) {
+
+    find_server_and_update_current_info(s, FIND_NEXT_HOP_CALLER_HANDLE_CACHE_OPEN_READ_MISS);
+    // find_server_and_update_current_info will transition the state,
+    // and call HandleCacheOpenReadMissAfterNexthop after the nextHop lookup
+    return;
+  }
+
+  // miss, but only-if-cached is set
+  build_error_response(s, HTTP_STATUS_GATEWAY_TIMEOUT, "Not Cached", "cache#not_in_cache");
+  s->next_action = SM_ACTION_SEND_ERROR_CACHE_NOOP;
+}
+
+void
+HttpTransact::HandleCacheOpenReadMissAfterNexthop(State *s)
+{
+  // a parent lookup could come back as PARENT_FAIL if in parent.config go_direct == false and
+  // there are no available parents (all down).
+  if (s->parent_result.result == PARENT_FAIL) {
+    handle_parent_died(s);
+    return;
+  }
+  if (!s->current.server->dst_addr.isValid()) {
+    ink_release_assert(s->parent_result.result == PARENT_DIRECT || s->current.request_to == PARENT_PROXY ||
+                       s->http_config_param->no_dns_forward_to_parent != 0);
+    if (s->parent_result.result == PARENT_DIRECT && s->http_config_param->no_dns_forward_to_parent != 1) {
+      return CallOSDNSLookup(s);
+    }
+    if (s->current.request_to == PARENT_PROXY) {
+      TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, HttpTransact::PPDNSLookup);
+    } else {
       handle_parent_died(s);
       return;
     }
-    if (!s->current.server->dst_addr.isValid()) {
-      ink_release_assert(s->parent_result.result == PARENT_DIRECT || s->current.request_to == PARENT_PROXY ||
-                         s->http_config_param->no_dns_forward_to_parent != 0);
-      if (s->parent_result.result == PARENT_DIRECT && s->http_config_param->no_dns_forward_to_parent != 1) {
-        return CallOSDNSLookup(s);
-      }
-      if (s->current.request_to == PARENT_PROXY) {
-        TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, HttpTransact::PPDNSLookup);
-      } else {
-        handle_parent_died(s);
-        return;
-      }
-    }
-    build_request(s, &s->hdr_info.client_request, &s->hdr_info.server_request, s->current.server->http_version);
-    s->current.attempts = 0;
-    s->next_action      = how_to_open_connection(s);
-    if (s->current.server == &s->server_info && s->next_hop_scheme == URL_WKSIDX_HTTP) {
-      HttpTransactHeaders::remove_host_name_from_url(&s->hdr_info.server_request);
-    }
-  } else { // miss, but only-if-cached is set
-    build_error_response(s, HTTP_STATUS_GATEWAY_TIMEOUT, "Not Cached", "cache#not_in_cache");
-    s->next_action = SM_ACTION_SEND_ERROR_CACHE_NOOP;
   }
-
-  return;
+  build_request(s, &s->hdr_info.client_request, &s->hdr_info.server_request, s->current.server->http_version);
+  s->current.attempts = 0;
+  s->next_action      = how_to_open_connection(s);
+  if (s->current.server == &s->server_info && s->next_hop_scheme == URL_WKSIDX_HTTP) {
+    HttpTransactHeaders::remove_host_name_from_url(&s->hdr_info.server_request);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -3517,6 +3638,45 @@ HttpTransact::HandleStatPage(State *s)
   s->next_action       = SM_ACTION_INTERNAL_CACHE_NOOP;
 }
 
+void
+HttpTransact::HandleResponseFromParentAfterState(State *s)
+{
+  // We have either tried to find a new parent or failed over to the
+  //   origin server
+  switch (s->find_server_looking_up) {
+  case PARENT_PROXY:
+    ink_assert(s->current.request_to == PARENT_PROXY);
+    TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
+    break;
+  case ORIGIN_SERVER:
+    // Next lookup is Origin Server, try DNS for Origin Server
+    return CallOSDNSLookup(s);
+    break;
+  case HOST_NONE:
+    handle_parent_died(s);
+    break;
+  default:
+    // This handles:
+    // UNDEFINED_LOOKUP
+    // INCOMING_ROUTER
+    break;
+  }
+}
+
+void
+HttpTransact::HandleResponseFromParentAfterNexthopParentRetry(State *s)
+{
+  s->current.retry_type = PARENT_RETRY_NONE;
+  HandleResponseFromParentAfterState(s);
+}
+
+void
+HttpTransact::HandleResponseFromParentAfterNexthopNoLiveConnection(State *s)
+{
+  HandleResponseFromParentAfterState(s);
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////
 // Name       : handle_response_from_parent
 // Description: response came from a parent proxy
@@ -3538,7 +3698,7 @@ HttpTransact::HandleStatPage(State *s)
 void
 HttpTransact::handle_response_from_parent(State *s)
 {
-  LookingUp_t next_lookup = UNDEFINED_LOOKUP;
+  s->find_server_looking_up = UNDEFINED_LOOKUP;
   TxnDebug("http_trans", "[handle_response_from_parent] (hrfp)");
   HTTP_RELEASE_ASSERT(s->current.server == &s->parent_info);
 
@@ -3562,9 +3722,10 @@ HttpTransact::handle_response_from_parent(State *s)
       markParentDown(s);
       s->current.unavailable_server_retry_attempts++;
     }
-    next_lookup           = find_server_and_update_current_info(s);
-    s->current.retry_type = PARENT_RETRY_NONE;
-    break;
+    find_server_and_update_current_info(s, FIND_NEXT_HOP_CALLER_HANDLE_RESPONSE_FROM_PARENT_PARENT_RETRY);
+    // find_server_and_update_current_info will transition the state,
+    // and call handle_response_from_parent_after_nexthop_parent_retry after the nextHop lookup
+    return;
   default:
     TxnDebug("http_trans", "[hrfp] connection not alive");
     SET_VIA_STRING(VIA_DETAIL_PP_CONNECT, VIA_DETAIL_PP_FAILURE);
@@ -3615,7 +3776,10 @@ HttpTransact::handle_response_from_parent(State *s)
           markParentDown(s);
         }
         // We are done so look for another parent if any
-        next_lookup = find_server_and_update_current_info(s);
+        find_server_and_update_current_info(s, FIND_NEXT_HOP_CALLER_HANDLE_RESPONSE_FROM_PARENT_NO_LIVE_CONNECTION);
+        // find_server_and_update_current_info will transition the state,
+        // and call handle_response_from_parent_after_nexthop_parent_retry after the nextHop lookup
+        return;
       }
     } else {
       // Done trying parents... fail over to origin server if that is
@@ -3626,31 +3790,12 @@ HttpTransact::handle_response_from_parent(State *s)
         markParentDown(s);
       }
       s->parent_result.result = PARENT_FAIL;
-      next_lookup             = HOST_NONE;
+      s->find_server_looking_up = HOST_NONE;
     }
     break;
   }
 
-  // We have either tried to find a new parent or failed over to the
-  //   origin server
-  switch (next_lookup) {
-  case PARENT_PROXY:
-    ink_assert(s->current.request_to == PARENT_PROXY);
-    TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
-    break;
-  case ORIGIN_SERVER:
-    // Next lookup is Origin Server, try DNS for Origin Server
-    return CallOSDNSLookup(s);
-    break;
-  case HOST_NONE:
-    handle_parent_died(s);
-    break;
-  default:
-    // This handles:
-    // UNDEFINED_LOOKUP
-    // INCOMING_ROUTER
-    break;
-  }
+  HandleResponseFromParentAfterState(s);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

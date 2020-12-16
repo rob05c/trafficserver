@@ -100,6 +100,15 @@ ParentConfigParams::apiParentExists(HttpRequestData *rdata)
 }
 
 void
+ParentConfigParams::findNextHop(HttpRequestData *rdata, ParentResult *result, unsigned int fail_threshold, unsigned int retry_time) {
+	if(result->result == PARENT_SPECIFIED) {
+		this->nextParent(rdata, result, fail_threshold, retry_time);
+	} else {
+		this->findParent(rdata, result, fail_threshold, retry_time);
+	}
+}
+
+void
 ParentConfigParams::findParent(HttpRequestData *rdata, ParentResult *result, unsigned int fail_threshold, unsigned int retry_time)
 {
   P_table *tablePtr        = parent_table;

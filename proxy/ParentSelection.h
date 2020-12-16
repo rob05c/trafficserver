@@ -362,6 +362,7 @@ public:
   ~ParentConfigParams() override;
 
   bool apiParentExists(HttpRequestData *rdata);
+  void findNextHop(HttpRequestData *rdata, ParentResult *result, unsigned int fail_threshold, unsigned int retry_time);
   void findParent(HttpRequestData *rdata, ParentResult *result, unsigned int fail_threshold, unsigned int retry_time);
   void nextParent(HttpRequestData *rdata, ParentResult *result, unsigned int fail_threshold, unsigned int retry_time);
   bool parentExists(HttpRequestData *rdata);

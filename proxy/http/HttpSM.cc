@@ -1673,6 +1673,12 @@ HttpSM::handle_api_return()
   case HttpTransact::SM_ACTION_API_SM_SHUTDOWN:
     state_remove_from_list(EVENT_NONE, nullptr);
     return;
+  case HttpTransact::SM_ACTION_FIND_NEXT_HOP:
+    call_transact_and_set_next_state(HttpTransact::FindNextHop);
+    return;
+  case HttpTransact::SM_ACTION_AFTER_FIND_NEXT_HOP:
+    call_transact_and_set_next_state(HttpTransact::AfterFindNextHop);
+    return;
   default:
     ink_release_assert(!"Not reached");
     break;
@@ -5280,6 +5286,12 @@ HttpSM::do_api_callout_internal()
       cur_hook_id = TS_HTTP_TXN_CLOSE_HOOK;
     }
     break;
+  case HttpTransact::SM_ACTION_FIND_NEXT_HOP:
+    cur_hook_id = TS_HTTP_FIND_NEXT_HOP_HOOK;
+    break;
+  case HttpTransact::SM_ACTION_AFTER_FIND_NEXT_HOP:
+    cur_hook_id = TS_HTTP_AFTER_FIND_NEXT_HOP_HOOK;
+    break;
   default:
     cur_hook_id = static_cast<TSHttpHookID>(-1);
     ink_assert(!"not reached");
@@ -7361,6 +7373,8 @@ HttpSM::set_next_state()
   case HttpTransact::SM_ACTION_API_READ_CACHE_HDR:
   case HttpTransact::SM_ACTION_API_READ_RESPONSE_HDR:
   case HttpTransact::SM_ACTION_API_SEND_RESPONSE_HDR:
+  case HttpTransact::SM_ACTION_FIND_NEXT_HOP:
+  case HttpTransact::SM_ACTION_AFTER_FIND_NEXT_HOP:
   case HttpTransact::SM_ACTION_API_CACHE_LOOKUP_COMPLETE: {
     t_state.api_next_action = t_state.next_action;
     do_api_callout();

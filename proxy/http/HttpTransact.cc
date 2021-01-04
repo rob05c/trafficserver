@@ -97,6 +97,10 @@ bypass_ok(HttpTransact::State *s)
   bool r          = false;
   url_mapping *mp = s->url_map.getMapping();
 
+  if (s->response_action.handled) {
+    return strlen(s->response_action.hostname) > 0;
+  }
+
   if (mp && mp->strategy) {
     // remap strategies do not support the TSHttpTxnParentProxySet API.
     r = mp->strategy->go_direct;
@@ -153,6 +157,10 @@ parent_is_proxy(HttpTransact::State *s)
   bool r          = false;
   url_mapping *mp = s->url_map.getMapping();
 
+  if (s->response_action.handled) {
+    return strlen(s->response_action.proxy) > 0;
+  }
+
   if (mp && mp->strategy) {
     r = mp->strategy->parent_is_proxy;
   } else if (s->parent_params) {
@@ -178,6 +186,23 @@ inline static void
 findParent(HttpTransact::State *s)
 {
   url_mapping *mp = s->url_map.getMapping();
+
+
+  if (s->response_action.handled) {
+    s->parent_result.port = s->response_action.port;
+    s->parent_result.result = PARENT_SPECIFIED;
+    s->parent_result.retry = true;
+    if (strlen(s->response_action.proxy) > 0) {
+      s->parent_result.hostname = s->response_action.proxy;
+    } else if (strlen(s->response_action.hostname) > 0) {
+      s->parent_result.hostname = s->response_action.hostname;
+    } else if (!s->response_action.fail) {
+      s->parent_result.result = PARENT_DIRECT;
+    } else {
+      s->parent_result.result = PARENT_FAIL;
+    }
+    return;
+  }
 
   if (mp && mp->strategy) {
     return mp->strategy->findNextHop(reinterpret_cast<TSHttpTxn>(s->state_machine));
@@ -222,6 +247,10 @@ markParentUp(HttpTransact::State *s)
 inline static bool
 parentExists(HttpTransact::State *s)
 {
+  if (s->response_action.handled) {
+    return s->response_action.fail && (strlen(s->response_action.proxy) > 0 || strlen(s->response_action.hostname) > 0);
+  }
+
   url_mapping *mp = s->url_map.getMapping();
   if (mp && mp->strategy) {
     return mp->strategy->nextHopExists(reinterpret_cast<TSHttpTxn>(s->state_machine));
@@ -237,6 +266,23 @@ inline static void
 nextParent(HttpTransact::State *s)
 {
   url_mapping *mp = s->url_map.getMapping();
+
+  if (s->response_action.handled) {
+    s->parent_result.port = s->response_action.port;
+    s->parent_result.result = PARENT_SPECIFIED;
+    s->parent_result.retry = true;
+    if (strlen(s->response_action.proxy) > 0) {
+      s->parent_result.hostname = s->response_action.proxy;
+    } else if (strlen(s->response_action.hostname) > 0) {
+      s->parent_result.hostname = s->response_action.hostname;
+    } else if (!s->response_action.fail) {
+      s->parent_result.result = PARENT_DIRECT;
+    } else {
+      s->parent_result.result = PARENT_FAIL;
+    }
+    return;
+  }
+
   if (mp && mp->strategy) {
     // NextHop only has a findNextHop() function.
     return mp->strategy->findNextHop(reinterpret_cast<TSHttpTxn>(s->state_machine));
@@ -338,6 +384,16 @@ inline static ParentRetry_t
 response_is_retryable(HttpTransact::State *s, HTTPStatus response_code)
 {
   if (!HttpTransact::is_response_valid(s, &s->hdr_info.server_response) || s->current.request_to != HttpTransact::PARENT_PROXY) {
+    return PARENT_RETRY_NONE;
+  }
+
+  if (s->response_action.handled) {
+    if (!s->response_action.fail) {
+      return PARENT_RETRY_NONE;
+    }
+    if (strlen(s->response_action.proxy) > 0 || strlen(s->response_action.hostname) > 0) {
+      return PARENT_RETRY_SIMPLE;
+    }
     return PARENT_RETRY_NONE;
   }
 
@@ -3357,6 +3413,116 @@ HttpTransact::OriginServerRawOpen(State *s)
   return;
 }
 
+// Translates the response_action into the internal data used by
+// HttpTransact/HttpSM for parent retry, primarily ParentResult parent_result.
+inline static void
+parse_response_action(HttpTransact::State *s)
+{
+  TxnDebug("http_trans", "[parse_response_action] handled %d", s->response_action.handled);
+
+  ink_assert(s->response_action.handled);
+
+
+  // HTTPStatus server_response = http_hdr_status_get(s->hdr_info.server_response.m_http);
+  // switch (response_is_retryable(s, server_response)) {
+  // case PARENT_RETRY_SIMPLE:
+  //   s->current.state      = HttpTransact::PARENT_RETRY;
+  //   s->current.retry_type = PARENT_RETRY_SIMPLE;
+  //   break;
+  // case PARENT_RETRY_UNAVAILABLE_SERVER:
+  //   s->current.state      = HttpTransact::PARENT_RETRY;
+  //   s->current.retry_type = PARENT_RETRY_UNAVAILABLE_SERVER;
+  //   break;
+  // case PARENT_RETRY_BOTH:
+  //   ink_assert(!"response_is_retryable should return an exact retry type, never both");
+  //   break;
+  // case PARENT_RETRY_NONE:
+  //   break; // no retry
+  // }
+
+  if (!s->response_action.fail) {
+    // if it's not an error, don't set anything, just return.
+    // The SM will cache and return to the client, as normal.
+    // If the response needed modifying in any way, the plugin
+    // should have done so.
+    TxnDebug("http_trans", "[parse_response_action] %s", "not a fail, returning");
+    return;
+  }
+
+  if (strlen(s->response_action.hostname) == 0 && strlen(s->response_action.proxy) == 0) {
+    TxnDebug("http_trans", "[parse_response_action] %s", "fail but no parent");
+    s->current.state      = HttpTransact::PARENT_RETRY;
+    s->parent_result.result = PARENT_FAIL;
+    return;
+  }
+
+  // only do simple = no markdown, never PARENT_RETRY_UNAVAILABLE_SERVER.
+  // Plugins should do their own markdown.
+  s->current.state      = HttpTransact::PARENT_RETRY;
+  s->current.retry_type = PARENT_RETRY_SIMPLE;
+  s->parent_result.retry    = true;
+  s->parent_result.port     = s->response_action.port;
+
+  if (strlen(s->response_action.hostname) > 0) {
+    TxnDebug("http_trans", "[parse_response_action] %s", "fail with host");
+    s->parent_result.hostname = s->response_action.hostname;
+    s->parent_result.result   = PARENT_DIRECT;
+
+    update_current_info(&s->current, &s->server_info, HttpTransact::ORIGIN_SERVER, (s->current.attempts)++);
+    update_dns_info(&s->dns_info, &s->current);
+    ink_assert(s->dns_info.looking_up == HttpTransact::ORIGIN_SERVER);
+    s->next_hop_scheme = s->scheme;
+//    return HttpTransact::ORIGIN_SERVER;
+  } else {
+    TxnDebug("http_trans", "[parse_response_action] %s", "fail with proxy");
+    s->parent_result.hostname = s->response_action.proxy;
+    s->parent_result.result   = PARENT_SPECIFIED;
+  }
+}
+
+// Does what the plugin instructed.
+void
+HttpTransact::handle_response_from_parent_plugin(State *s)
+{
+  TxnDebug("http_trans", "[handle_response_from_parent_plugin] handled %d", s->response_action.handled);
+
+  ink_assert(s->response_action.handled);
+
+  // parse the response_action from the plugin, and set State variables as necessary.
+  parse_response_action(s);
+
+  // There are 4 possible scenarios:
+  // 1. the response was good, send to client
+  // 2. response was bad, and don't retry but give the client an error
+  // 3. response was bad, retry as a Forward Proxy "parent" request
+  // 4. response was bad, retry as a normal "origin" request
+
+  // 1. the response was good, send to client
+  if (s->current.state == CONNECTION_ALIVE) {
+    TxnDebug("http_trans", "[handle_response_from_parent_plugin] %s", "good, sending to client");
+    s->current.server->connect_result = 0;
+    SET_VIA_STRING(VIA_DETAIL_PP_CONNECT, VIA_DETAIL_PP_SUCCESS);
+    return handle_forward_server_connection_open(s);
+  }
+
+  // 2. response was bad, and don't retry but give the client an error
+  if (s->parent_result.result == PARENT_FAIL) {
+    TxnDebug("http_trans", "[handle_response_from_parent_plugin] %s", "bad, no retry");
+    return handle_parent_died(s);
+  }
+
+  // 3. response was bad, retry as a Forward Proxy "parent" request
+  if (s->parent_result.result == PARENT_SPECIFIED) {
+    TxnDebug("http_trans", "[handle_response_from_parent_plugin] %s", "bad, retry proxy");
+    TRANSACT_RETURN(SM_ACTION_DNS_LOOKUP, PPDNSLookup);
+  }
+
+  // 4. response was bad, retry as a normal "origin" request
+  ink_assert(s->parent_result.result == PARENT_DIRECT);
+  TxnDebug("http_trans", "[handle_response_from_parent_plugin] %s", "bad, retry origin");
+  return CallOSDNSLookup(s);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Name       : HandleResponse
 // Description: called from the state machine when a response is received
@@ -3421,6 +3587,8 @@ HttpTransact::HandleResponse(State *s)
     ink_assert(!("s->current.request_to is not P.P. or O.S. - hmmm."));
     break;
   }
+
+  s->response_action = {0}; // unset plugin response_action, so it's cleared before the (potential) next request
 
   return;
 }
@@ -3541,6 +3709,12 @@ HttpTransact::handle_response_from_parent(State *s)
   LookingUp_t next_lookup = UNDEFINED_LOOKUP;
   TxnDebug("http_trans", "[handle_response_from_parent] (hrfp)");
   HTTP_RELEASE_ASSERT(s->current.server == &s->parent_info);
+
+  TxnDebug("http_trans", "[handle_response_from_parent] (hrfp) plugin handled %d", s->response_action.handled);
+
+  // if (s->response_action.handled) {
+  //   return handle_response_from_parent_plugin(s);
+  // }
 
   simple_or_unavailable_server_retry(s);
 

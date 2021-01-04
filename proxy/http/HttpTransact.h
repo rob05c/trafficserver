@@ -37,6 +37,7 @@
 #include "Transform.h"
 #include "Milestones.h"
 #include "ts/remap.h"
+#include "ts/nexthop.h"
 #include "RemapPluginInfo.h"
 #include "UrlMapping.h"
 #include "records/I_RecHttp.h"
@@ -820,6 +821,8 @@ public:
     bool transparent_passthrough = false;
     bool range_in_cache          = false;
 
+    TSResponseAction response_action = {0};
+
     // Methods
     void
     init()
@@ -962,6 +965,7 @@ public:
   static void handle_transform_ready(State *s);
   static void handle_transform_cache_write(State *s);
   static void handle_response_from_parent(State *s);
+  static void handle_response_from_parent_plugin(State *s);
   static void handle_response_from_server(State *s);
   static void delete_server_rr_entry(State *s, int max_retries);
   static void retry_server_connection_not_open(State *s, ServerState_t conn_state, unsigned max_retries);

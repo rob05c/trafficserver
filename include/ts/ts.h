@@ -2569,6 +2569,13 @@ tsapi TSReturnCode TSRemapFromUrlGet(TSHttpTxn txnp, TSMLoc *urlLocp);
 //
 tsapi TSReturnCode TSRemapToUrlGet(TSHttpTxn txnp, TSMLoc *urlLocp);
 
+
+// Override response behavior, and hard-set the state machine for whether to succeed or fail, and how.
+tsapi void TSHttpTxnResponseActionSet(TSHttpTxn txnp, bool failed, const char* hostname, const char* proxy, int port, const char* scheme);
+
+// Get the overridden response behavior set by previously called plugins.
+	tsapi void TSHttpTxnResponseActionGet(TSHttpTxn txnp, bool *failed, const char **hostname, const char **proxy, int *port, const char **scheme);
+
 /*
  * Get a TSIOBufferReader to read the buffered body. The return value needs to be freed.
  */

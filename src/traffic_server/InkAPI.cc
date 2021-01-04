@@ -9949,6 +9949,50 @@ TSRemapToUrlGet(TSHttpTxn txnp, TSMLoc *urlLocp)
   return remapUrlGet(txnp, urlLocp, &UrlMappingContainer::getToURL);
 }
 
+// Callers must maintain owernship of hostname, proxy, and scheme; and their lifetimes must exceed the transaction.
+// scheme must be TS_URL_SCHEME_HTTP or TS_URL_SCHEME_HTTPS.
+tsapi void
+TSHttpTxnResponseActionSet(TSHttpTxn txnp, bool failed, const char* hostname, const char* proxy, int port, const char* scheme)
+{
+  sdk_assert(strcmp(TS_URL_SCHEME_HTTP, scheme) == 0 || strcmp(TS_URL_SCHEME_HTTPS, scheme) == 0);
+
+  HttpSM *sm = reinterpret_cast<HttpSM *>(txnp);
+  HttpTransact::State *s = &(sm->t_state);
+  s->response_action.handled = true;
+  s->response_action.fail = failed;
+  s->response_action.hostname = hostname;
+  s->response_action.proxy = proxy;
+  s->response_action.port = port;
+  s->response_action.scheme = scheme;
+  // if (strcmp(scheme,TS_URL_SCHEME_HTTPS) == 0) {
+  //   sm->response_action.scheme = URL_WKSIDX_HTTPS
+  // } else {
+  //   sm->response_action.scheme = URL_WKSIDX_HTTP // assume HTTP if not HTTPS. Other schemes are not supported
+  // }
+}
+
+//
+// Used to get the ResponseAction set by other plugins.
+//
+// The hostname, proxy, port, and scheme are out-params and must point to valid locations.
+// The returned hostname, proxy, and scheme must not be modified, and are owned by some other plugin if not null.
+//
+// These will always be default values, if no other plugin has called TSHttpTxnResponseActionGet.
+// Plugins do not have the ability to "get" the default parent lookup if no other plugin sets an action,
+// because that lookup doesn't occur unless no plugin sets an action.
+//
+tsapi void
+TSHttpTxnResponseActionGet(TSHttpTxn txnp, bool *failed, const char **hostname, const char **proxy, int *port, const char **scheme)
+{
+  HttpSM *sm = reinterpret_cast<HttpSM *>(txnp);
+  HttpTransact::State *s = &(sm->t_state);
+  *failed = s->response_action.fail;
+  *hostname = s->response_action.hostname;
+  *proxy = s->response_action.proxy;
+  *port = s->response_action.port;
+  *scheme = s->response_action.scheme;
+}
+
 tsapi TSIOBufferReader
 TSHttpTxnPostBufferReaderGet(TSHttpTxn txnp)
 {

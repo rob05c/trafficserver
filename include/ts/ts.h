@@ -2569,6 +2569,15 @@ tsapi TSReturnCode TSRemapFromUrlGet(TSHttpTxn txnp, TSMLoc *urlLocp);
 //
 tsapi TSReturnCode TSRemapToUrlGet(TSHttpTxn txnp, TSMLoc *urlLocp);
 
+
+// Override response behavior, and hard-set the state machine for whether to succeed or fail, and how.
+tsapi void
+TSHttpTxnResponseActionSet(TSHttpTxn txnp, bool failed, const char* hostname, int port, bool retry, bool nextHopExists, bool responseIsRetryable, bool goDirect, bool parentIsProxy);
+
+// Get the overridden response behavior set by previously called plugins.
+tsapi void
+TSHttpTxnResponseActionGet(TSHttpTxn txnp, bool *failed, const char **hostname, int *port, bool *retry, bool *nextHopExists, bool *responseIsRetryable, bool *goDirect, bool *parentIsProxy);
+
 /*
  * Get a TSIOBufferReader to read the buffered body. The return value needs to be freed.
  */
@@ -2608,6 +2617,39 @@ tsapi TSReturnCode TSHttpTxnClientStreamIdGet(TSHttpTxn txnp, uint64_t *stream_i
  * implement stream priorities.
  */
 tsapi TSReturnCode TSHttpTxnClientStreamPriorityGet(TSHttpTxn txnp, TSHttpPriority *priority);
+
+/*
+ * Returns TS_SUCCESS if hostname is this machine, as used for parent and remap self-detection.
+ * Returns TS_ERROR if hostname is not this machine.
+ */
+tsapi TSReturnCode TSHostnameIsSelf(const char *hostname);
+
+/*
+ * Gets the status of hostname in the outparam status, and the status reason in the outparam reason.
+ * The reason is a logical-or combination of the reasons in TSHostStatusReason.
+ * If either outparam is null, it will not be set and no error will be returned.
+ * Returns TS_SUCCESS if the hostname was a parent and existed in the HostStatus, else TS_ERROR.
+ */
+tsapi TSReturnCode TSHostStatusGet(const char *hostname, const size_t hostname_len, TSHostStatus *status, unsigned int *reason);
+
+/*
+ * Sets the status of hostname in status, down_time, and reason.
+ * The reason is a logical-or combination of the reasons in TSHostStatusReason.
+ */
+tsapi void TSHostStatusSet(const char *hostname, const size_t hostname_len, TSHostStatus status, const unsigned int down_time,
+                           const unsigned int reason);
+
+struct TSParentResult;
+
+/*
+ * Gets the Transaction Parent Result pointer.
+ */
+tsapi void TSHttpTxnParentResultGet(TSHttpTxn txnp, struct TSParentResult *result);
+
+/*
+ * Sets the Transaction Parent Result pointer.
+ */
+tsapi void TSHttpTxnParentResultSet(TSHttpTxn txnp, struct TSParentResult *result);
 
 #ifdef __cplusplus
 }

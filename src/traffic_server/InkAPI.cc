@@ -9949,6 +9949,111 @@ TSRemapToUrlGet(TSHttpTxn txnp, TSMLoc *urlLocp)
   return remapUrlGet(txnp, urlLocp, &UrlMappingContainer::getToURL);
 }
 
+TSReturnCode
+TSHostnameIsSelf(const char *hostname)
+{
+  return Machine::instance()->is_self(hostname) ? TS_SUCCESS : TS_ERROR;
+}
+
+TSReturnCode
+TSHostStatusGet(const char *hostname, const size_t hostname_len, TSHostStatus *status, unsigned int *reason)
+{
+  HostStatRec *hst = HostStatus::instance().getHostStatus(std::string_view(hostname, hostname_len));
+  if (hst == nullptr) {
+    return TS_ERROR;
+  }
+  if (status != nullptr) {
+    *status = hst->status;
+  }
+  if (reason != nullptr) {
+    *reason = hst->reasons;
+  }
+  return TS_SUCCESS;
+}
+
+void
+TSHostStatusSet(const char *hostname, const size_t hostname_len, TSHostStatus status, const unsigned int down_time,
+                const unsigned int reason)
+{
+  HostStatus::instance().setHostStatus(std::string_view(hostname, hostname_len), status, down_time, reason);
+}
+
+void
+TSHttpTxnParentResultGet(TSHttpTxn txnp, TSParentResult *result)
+{
+  HttpSM *sm              = reinterpret_cast<HttpSM *>(txnp);
+  ParentResult *sm_result = &sm->t_state.parent_result;
+  sm_result->copyTo(result);
+}
+
+void
+TSHttpTxnParentResultSet(TSHttpTxn txnp, TSParentResult *result)
+{
+  HttpSM *sm              = reinterpret_cast<HttpSM *>(txnp);
+  ParentResult *sm_result = &sm->t_state.parent_result;
+  sm_result->copyFrom(result);
+}
+
+// Callers must maintain owernship of hostname, and its lifetimes must exceed the transaction.
+tsapi void
+TSHttpTxnResponseActionSet(TSHttpTxn txnp,
+  bool failed,
+  const char* hostname,
+  int port,
+  bool retry,
+  bool nextHopExists,
+  bool responseIsRetryable,
+  bool goDirect,
+  bool parentIsProxy
+)
+{
+  HttpSM *sm = reinterpret_cast<HttpSM *>(txnp);
+  HttpTransact::State *s = &(sm->t_state);
+  s->response_action.handled = true;
+  s->response_action.fail = failed;
+  s->response_action.hostname = hostname;
+  s->response_action.port = port;
+  s->response_action.retry = retry;
+  s->response_action.nextHopExists = nextHopExists;
+  s->response_action.responseIsRetryable = responseIsRetryable;
+  s->response_action.goDirect = goDirect;
+  s->response_action.parentIsProxy = parentIsProxy;
+}
+
+//
+// Used to get the ResponseAction set by other plugins.
+//
+// The hostname, proxy, port, and scheme are out-params and must point to valid locations.
+// The returned hostname, proxy, and scheme must not be modified, and are owned by some other plugin if not null.
+//
+// These will always be default values, if no other plugin has called TSHttpTxnResponseActionGet.
+// Plugins do not have the ability to "get" the default parent lookup if no other plugin sets an action,
+// because that lookup doesn't occur unless no plugin sets an action.
+//
+tsapi void
+TSHttpTxnResponseActionGet(TSHttpTxn txnp,
+  bool *failed,
+  const char **hostname,
+  int *port,
+  bool *retry,
+  bool *nextHopExists,
+  bool *responseIsRetryable,
+  bool *goDirect,
+  bool *parentIsProxy
+)
+{
+  HttpSM *sm = reinterpret_cast<HttpSM *>(txnp);
+  HttpTransact::State *s = &(sm->t_state);
+  *failed = s->response_action.fail;
+  *hostname = s->response_action.hostname;
+  *port = s->response_action.port;
+  *retry = s->response_action.retry;
+  *nextHopExists = s->response_action.nextHopExists;
+  *responseIsRetryable = s->response_action.responseIsRetryable;
+  *goDirect = s->response_action.goDirect;
+  *parentIsProxy = s->response_action.parentIsProxy;
+}
+
 tsapi TSIOBufferReader
 TSHttpTxnPostBufferReaderGet(TSHttpTxn txnp)
 {

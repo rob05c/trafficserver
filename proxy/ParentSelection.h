@@ -37,6 +37,7 @@
 #include "tscore/ConsistentHash.h"
 #include "tscore/Tokenizer.h"
 #include "tscore/ink_apidefs.h"
+#include "tscpp/api/parentresult.h"
 #include "HostStatus.h"
 
 #include <algorithm>
@@ -51,16 +52,6 @@ struct OverridableHttpConfigParams;
 class ParentRecord;
 class ParentSelectionStrategy;
 
-enum ParentResultType {
-  PARENT_UNDEFINED,
-  PARENT_DIRECT,
-  PARENT_SPECIFIED,
-  PARENT_AGENT,
-  PARENT_FAIL,
-};
-
-static const char *ParentResultStr[] = {"PARENT_UNDEFINED", "PARENT_DIRECT", "PARENT_SPECIFIED", "PARENT_AGENT", "PARENT_FAIL"};
-
 enum ParentRR_t {
   P_NO_ROUND_ROBIN = 0,
   P_STRICT_ROUND_ROBIN,
@@ -71,11 +62,11 @@ enum ParentRR_t {
 };
 
 enum ParentRetry_t {
-  PARENT_RETRY_NONE               = 0,
-  PARENT_RETRY_SIMPLE             = 1,
-  PARENT_RETRY_UNAVAILABLE_SERVER = 2,
+  TS_PARENT_RETRY_NONE               = 0,
+  TS_PARENT_RETRY_SIMPLE             = 1,
+  TS_PARENT_RETRY_UNAVAILABLE_SERVER = 2,
   // both simple and unavailable server retry
-  PARENT_RETRY_BOTH = 3
+  TS_PARENT_RETRY_BOTH = 3
 };
 
 struct UnavailableServerResponseCodes {
@@ -161,7 +152,7 @@ public:
   ParentSelectionStrategy *selection_strategy                        = nullptr;
   UnavailableServerResponseCodes *unavailable_server_retry_responses = nullptr;
   SimpleRetryResponseCodes *simple_server_retry_responses            = nullptr;
-  ParentRetry_t parent_retry                                         = PARENT_RETRY_NONE;
+  ParentRetry_t parent_retry                                         = TS_PARENT_RETRY_NONE;
   int max_simple_retries                                             = 1;
   int max_unavailable_server_retries                                 = 1;
   int secondary_mode                                                 = 1;
@@ -182,19 +173,19 @@ constexpr const uint32_t MAX_GROUP_RINGS = 5;
 struct ParentResult {
   ParentResult() { reset(); }
   // For outside consumption
-  ParentResultType result;
+  TSParentResultType result;
   const char *hostname;
   int port;
   bool retry;
   bool chash_init[MAX_GROUP_RINGS] = {false};
-  HostStatus_t first_choice_status = HostStatus_t::HOST_STATUS_INIT;
+  TSHostStatus first_choice_status = TSHostStatus::TS_HOST_STATUS_INIT;
 
   void
   reset()
   {
     ink_zero(*this);
     line_number   = -1;
-    result        = PARENT_UNDEFINED;
+    result        = TS_PARENT_UNDEFINED;
     mapWrapped[0] = false;
     mapWrapped[1] = false;
   }
@@ -211,9 +202,9 @@ struct ParentResult {
   {
     if (rec == nullptr) {
       // If we don't have a result, we either haven't done a parent
-      // lookup yet (PARENT_UNDEFINED), or the lookup didn't match
-      // anything (PARENT_DIRECT).
-      ink_assert(result == PARENT_UNDEFINED || result == PARENT_DIRECT);
+      // lookup yet (TS_PARENT_UNDEFINED), or the lookup didn't match
+      // anything (TS_PARENT_DIRECT).
+      ink_assert(result == TS_PARENT_UNDEFINED || result == TS_PARENT_DIRECT);
       return false;
     }
 
@@ -230,7 +221,7 @@ struct ParentResult {
   unsigned
   retry_type() const
   {
-    return is_api_result() ? PARENT_RETRY_NONE : rec->parent_retry;
+    return is_api_result() ? TS_PARENT_RETRY_NONE : rec->parent_retry;
   }
 
   unsigned
@@ -242,13 +233,13 @@ struct ParentResult {
     }
 
     switch (method) {
-    case PARENT_RETRY_NONE:
+    case TS_PARENT_RETRY_NONE:
       return 0;
-    case PARENT_RETRY_SIMPLE:
+    case TS_PARENT_RETRY_SIMPLE:
       return rec->max_simple_retries;
-    case PARENT_RETRY_UNAVAILABLE_SERVER:
+    case TS_PARENT_RETRY_UNAVAILABLE_SERVER:
       return rec->max_unavailable_server_retries;
-    case PARENT_RETRY_BOTH:
+    case TS_PARENT_RETRY_BOTH:
       return std::max(rec->max_unavailable_server_retries, rec->max_simple_retries);
     }
 
@@ -259,14 +250,14 @@ struct ParentResult {
   response_is_retryable(HTTPStatus response_code) const
   {
     Debug("parent_select", "In response_is_retryable, code: %d", response_code);
-    if (retry_type() == PARENT_RETRY_BOTH) {
+    if (retry_type() == TS_PARENT_RETRY_BOTH) {
       Debug("parent_select", "Saw retry both");
       return (rec->unavailable_server_retry_responses->contains(response_code) ||
               rec->simple_server_retry_responses->contains(response_code));
-    } else if (retry_type() == PARENT_RETRY_UNAVAILABLE_SERVER) {
+    } else if (retry_type() == TS_PARENT_RETRY_UNAVAILABLE_SERVER) {
       Debug("parent_select", "Saw retry unavailable server");
       return rec->unavailable_server_retry_responses->contains(response_code);
-    } else if (retry_type() == PARENT_RETRY_SIMPLE) {
+    } else if (retry_type() == TS_PARENT_RETRY_SIMPLE) {
       Debug("parent_select", "Saw retry simple retry");
       return rec->simple_server_retry_responses->contains(response_code);
     } else {
@@ -281,11 +272,14 @@ struct ParentResult {
       return false;
     } else {
       // Caller should check for a valid result beforehand.
-      ink_assert(result != PARENT_UNDEFINED);
+      ink_assert(result != TS_PARENT_UNDEFINED);
       ink_assert(is_some());
       return rec->bypass_ok();
     }
   }
+
+  void copyFrom(TSParentResult *r);
+  void copyTo(TSParentResult *r);
 
   void
   print()
@@ -440,7 +434,7 @@ ParentRecord *createDefaultParent(char *val);
 // Unit Test Functions
 void show_result(ParentResult *aParentResult);
 void br(HttpRequestData *h, const char *os_hostname, sockaddr const *dest_ip = nullptr); // short for build request
-int verify(ParentResult *r, ParentResultType e, const char *h, int p);
+int verify(ParentResult *r, TSParentResultType e, const char *h, int p);
 
 /*
   For supporting multiple Socks servers, we essentially use the

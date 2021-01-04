@@ -1812,7 +1812,7 @@ HttpSM::state_http_server_open(int event, void *data)
     }
 
     attach_server_session(session);
-    if (t_state.current.request_to == HttpTransact::PARENT_PROXY) {
+    if (t_state.current.request_to == HttpTransact::TS_PARENT_PROXY) {
       session->to_parent_proxy = true;
       HTTP_INCREMENT_DYN_STAT(http_current_parent_proxy_connections_stat);
       HTTP_INCREMENT_DYN_STAT(http_total_parent_proxy_connections_stat);
@@ -4765,7 +4765,7 @@ HttpSM::send_origin_throttled_response()
   // if the request is to a parent proxy, do not reset
   // t_state.current.attempts so that another parent or
   // NextHop may be tried.
-  if (t_state.current.request_to != HttpTransact::PARENT_PROXY) {
+  if (t_state.current.request_to != HttpTransact::TS_PARENT_PROXY) {
     t_state.current.attempts = t_state.txn_conf->connect_attempts_max_retries;
   }
   t_state.current.state = HttpTransact::OUTBOUND_CONGESTION;
@@ -7356,6 +7356,8 @@ HttpSM::set_next_state()
   case HttpTransact::SM_ACTION_API_READ_REQUEST_HDR:
   case HttpTransact::SM_ACTION_REQUEST_BUFFER_READ_COMPLETE:
   case HttpTransact::SM_ACTION_API_OS_DNS:
+    SMDebug("http_trans", "case SM_ACTION_API_OS_DNS");
+    // Fall through
   case HttpTransact::SM_ACTION_API_SEND_REQUEST_HDR:
   case HttpTransact::SM_ACTION_API_READ_CACHE_HDR:
   case HttpTransact::SM_ACTION_API_READ_RESPONSE_HDR:
@@ -7387,6 +7389,7 @@ HttpSM::set_next_state()
   }
 
   case HttpTransact::SM_ACTION_DNS_LOOKUP: {
+    SMDebug("http_trans", "case SM_ACTION_DNS_LOOKUP");
     sockaddr const *addr;
 
     if (t_state.api_server_addr_set) {
@@ -7410,7 +7413,7 @@ HttpSM::set_next_state()
       call_transact_and_set_next_state(nullptr);
       break;
     } else if (t_state.http_config_param->use_client_target_addr == 2 && !t_state.url_remap_success &&
-               t_state.parent_result.result != PARENT_SPECIFIED && t_state.client_info.is_transparent &&
+               t_state.parent_result.result != TS_PARENT_SPECIFIED && t_state.client_info.is_transparent &&
                t_state.dns_info.os_addr_style == HttpTransact::DNSLookupInfo::OS_Addr::OS_ADDR_TRY_DEFAULT &&
                ats_is_ip(addr = ua_txn->get_netvc()->get_local_addr())) {
       /* If the connection is client side transparent and the URL
@@ -7439,14 +7442,14 @@ HttpSM::set_next_state()
       t_state.dns_info.os_addr_style = HttpTransact::DNSLookupInfo::OS_Addr::OS_ADDR_TRY_CLIENT;
       call_transact_and_set_next_state(nullptr);
       break;
-    } else if (t_state.parent_result.result == PARENT_UNDEFINED && t_state.dns_info.lookup_success) {
+    } else if (t_state.parent_result.result == TS_PARENT_UNDEFINED && t_state.dns_info.lookup_success) {
       // Already set, and we don't have a parent proxy to lookup
       ink_assert(ats_is_ip(t_state.host_db_info.ip()));
       SMDebug("dns", "[HttpTransact::HandleRequest] Skipping DNS lookup, provided by plugin");
       call_transact_and_set_next_state(nullptr);
       break;
     } else if (t_state.dns_info.looking_up == HttpTransact::ORIGIN_SERVER && t_state.http_config_param->no_dns_forward_to_parent &&
-               t_state.parent_result.result != PARENT_UNDEFINED) {
+               t_state.parent_result.result != TS_PARENT_UNDEFINED) {
       t_state.dns_info.lookup_success = true;
       call_transact_and_set_next_state(nullptr);
       break;

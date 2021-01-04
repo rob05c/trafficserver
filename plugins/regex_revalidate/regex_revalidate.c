@@ -526,14 +526,14 @@ TSPluginInit(int argc, const char *argv[])
   TSContDataSet(main_cont, (void *)pstate);
   TSHttpHookAdd(TS_HTTP_CACHE_LOOKUP_COMPLETE_HOOK, main_cont);
 
-  config_cont = TSContCreate(config_handler, TSMutexCreate());
-  TSContDataSet(config_cont, (void *)pstate);
+  /* config_cont = TSContCreate(config_handler, TSMutexCreate()); */
+  /* TSContDataSet(config_cont, (void *)pstate); */
 
-  TSMgmtUpdateRegister(config_cont, LOG_PREFIX);
+  /* TSMgmtUpdateRegister(config_cont, LOG_PREFIX); */
 
-  if (!disable_timed_reload) {
-    TSContScheduleOnPool(config_cont, CONFIG_TMOUT, TS_THREAD_POOL_TASK);
-  }
+  /* if (!disable_timed_reload) { */
+  /*   TSContScheduleOnPool(config_cont, CONFIG_TMOUT, TS_THREAD_POOL_TASK); */
+  /* } */
 
   TSDebug(LOG_PREFIX, "Plugin Init Complete");
 }
